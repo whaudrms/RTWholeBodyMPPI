@@ -59,12 +59,12 @@ joint_references:
   in_place:
     type: "tsv"
     name: "in_place"
-    path: "../control/gait_scheduler/gaits/FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv"
+    path:  "../../gait_scheduler/gaits/FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv"
     frequency_hz: 100.0
   walk_fast:
     type: "tsv"
     name: "walk_fast"
-    path: "../control/gait_scheduler/gaits/FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv"
+    path: "../../gait_scheduler/gaits/FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv"
     frequency_hz: 100.0
 
 desired_linear_velocity: [0.0, 0.0, 0.0]

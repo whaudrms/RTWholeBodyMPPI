@@ -1,8 +1,6 @@
-"""Open the B2-Z1 seated model in MuJoCo's passive viewer."""
-
 import mujoco.viewer
 
-from legged_mani.interface import B2Z1Env
+from legged_mani.mani_mppi.interface.environment import B2Z1Env
 
 
 def main() -> None:

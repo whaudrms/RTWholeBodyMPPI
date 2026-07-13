@@ -51,8 +51,8 @@ noise_sigma:
 
 # Diagonal entries of the 45 x 45 state cost matrix Q.
 Q_diag:
-  - 5000.0  # Base x position
-  - 5000.0  # Base y position
+  - 500.0  # Base x position
+  - 500.0  # Base y position
   - 2000.0  # Base z position
   - 25000.0 # Base quaternion distance
   - 0.0     # Quaternion component

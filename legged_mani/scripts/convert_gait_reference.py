@@ -8,7 +8,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from legged_mani.interface.environment import MODEL_PATH
+from legged_mani.mani_mppi.interface.environment import MODEL_PATH
 
 
 DEFAULT_SOURCE = (
@@ -23,6 +23,7 @@ DEFAULT_SOURCE = (
 )
 DEFAULT_OUTPUT = (
     Path(__file__).resolve().parents[1]
+    / "whole_body_mppi"
     / "control"
     / "gait_scheduler"
     / "gaits"

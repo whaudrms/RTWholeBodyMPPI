@@ -1,6 +1,6 @@
-"""Compatibility import; implementation lives in :mod:`legged_mani.interface`."""
+"""Compatibility import; implementation lives in :mod:`legged_mani.whole_body_mppi.interface`."""
 
-from legged_mani.interface.environment import (  # noqa: F401
+from legged_mani.mani_mppi.interface.environment import (  # noqa: F401
     ACTUATOR_NAMES,
     ARM_JOINT_NAMES,
     LEG_JOINT_NAMES,
