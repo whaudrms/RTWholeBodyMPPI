@@ -1,0 +1,167 @@
+# ============================
+# MPPI Configuration File
+# ============================
+
+# MPPI Parameters
+dt: 0.01
+n_samples: 30
+lambda: 0.1
+horizon: 40
+n_workers: 5
+seed: 42
+# Match the original Go1 planner/simulator startup: initialize around the
+# seated control while tracking the standing body pose and in-place gait.
+keyframe: "sit"
+body_reference_keyframe: "stand"
+
+# The original BaseMPPI does not initialize its nominal trajectory from the
+# simulator keyframe. It uses alternating -0.3/+0.3 hip targets with the
+# seated thigh/calf targets. Keep that behavior and append the seated Z1 pose.
+sampling_init:
+  - -0.3
+  - 1.34
+  - -2.83
+  - 0.3
+  - 1.34
+  - -2.83
+  - -0.3
+  - 1.34
+  - -2.83
+  - 0.3
+  - 1.34
+  - -2.83
+  - 0.0
+  - 1.0
+  - -0.6
+  - 0.0
+
+# ============================
+# Model Parameters for Contact Dynamics
+# ============================
+o_solref:
+  - 0.02
+  - 1.0
+rollout_cone: "pyramidal"
+
+# ============================
+# Spline Parameters
+# ============================
+sample_type: "cubic"
+n_knots: 4
+
+# ============================
+# Joint Reference
+# ============================
+# 32 rows: 16 B2-Z1 joint positions followed by 16 joint velocities.
+# Adapted from the FAST gait used by the original mppi_locomotion.py and
+# centered on the B2 stand control.
+joint_references:
+  in_place:
+    type: "tsv"
+    name: "in_place"
+    path: "../control/gait_scheduler/gaits/FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv"
+    frequency_hz: 100.0
+  walk_fast:
+    type: "tsv"
+    name: "walk_fast"
+    path: "../control/gait_scheduler/gaits/FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv"
+    frequency_hz: 100.0
+
+desired_linear_velocity: [0.0, 0.0, 0.0]
+desired_angular_velocity: [0.0, 0.0, 0.0]
+
+# ============================
+# Noise Parameters
+# ============================
+noise_sigma:
+  - 0.06 # Hip joint (FR)
+  - 0.1  # Thigh joint (FR)
+  - 0.1  # Calf joint (FR)
+  - 0.06 # Hip joint (FL)
+  - 0.1  # Thigh joint (FL)
+  - 0.1  # Calf joint (FL)
+  - 0.06 # Hip joint (RR)
+  - 0.1  # Thigh joint (RR)
+  - 0.1  # Calf joint (RR)
+  - 0.06 # Hip joint (RL)
+  - 0.1  # Thigh joint (RL)
+  - 0.1  # Calf joint (RL)
+  - 0.0  # Z1 joint1
+  - 0.0  # Z1 joint2
+  - 0.0  # Z1 joint3
+  - 0.0  # Z1 joint4
+
+# ============================
+# Cost Function Parameters
+# ============================
+Q_diag:
+  - 500.0    # Base x position
+  - 500.0    # Base y position
+  - 500.0    # Base z position
+  - 4000.0 # Base quaternion distance
+  - 0.0     # Quaternion component
+  - 0.0     # Quaternion component
+  - 0.0     # Quaternion component
+  - 800.0   # FR hip position
+  - 800.0   # FR thigh position
+  - 800.0   # FR calf position
+  - 800.0   # FL hip position
+  - 800.0   # FL thigh position
+  - 800.0   # FL calf position
+  - 800.0   # RR hip position
+  - 800.0   # RR thigh position
+  - 800.0   # RR calf position
+  - 800.0   # RL hip position
+  - 800.0   # RL thigh position
+  - 800.0   # RL calf position
+  - 800.0   # Z1 joint1 position
+  - 800.0   # Z1 joint2 position
+  - 800.0   # Z1 joint3 position
+  - 800.0   # Z1 joint4 position
+  - 1.0     # Base linear velocity x
+  - 0.0001  # Base linear velocity y
+  - 0.0001  # Base linear velocity z
+  - 0.0001  # Base angular velocity x
+  - 0.0001  # Base angular velocity y
+  - 0.0001  # Base angular velocity z
+  - 0.1     # FR hip velocity
+  - 0.1     # FR thigh velocity
+  - 0.1     # FR calf velocity
+  - 0.1     # FL hip velocity
+  - 0.1     # FL thigh velocity
+  - 0.1     # FL calf velocity
+  - 0.1     # RR hip velocity
+  - 0.1     # RR thigh velocity
+  - 0.1     # RR calf velocity
+  - 0.1     # RL hip velocity
+  - 0.1     # RL thigh velocity
+  - 0.1     # RL calf velocity
+  - 0.1     # Z1 joint1 velocity
+  - 0.1     # Z1 joint2 velocity
+  - 0.1     # Z1 joint3 velocity
+  - 0.1     # Z1 joint4 velocity
+
+# ============================
+# Control Cost Matrix R
+# ============================
+R_diag:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+
+virtual_pd_gains:
+  kp: 50.0
+  kd: 3.0

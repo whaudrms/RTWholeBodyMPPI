@@ -1,0 +1,126 @@
+# ============================
+# MPPI Configuration File
+# ============================
+
+# MPPI Parameters
+dt: 0.01
+n_samples: 30
+lambda: 0.1
+horizon: 40
+n_workers: 5
+seed: 42
+keyframe: "sit"
+
+# ============================
+# Model Parameters for Contact Dynamics
+# ============================
+o_solref:
+  - 0.02
+  - 1.0
+
+# ============================
+# Spline Parameters
+# ============================
+sample_type: "cubic"
+n_knots: 4
+
+# ============================
+# Noise Parameters
+# ============================
+noise_sigma:
+  - 0.03 # Hip joint (FR)
+  - 0.06 # Thigh joint (FR)
+  - 0.06 # Calf joint (FR)
+  - 0.03 # Hip joint (FL)
+  - 0.06 # Thigh joint (FL)
+  - 0.06 # Calf joint (FL)
+  - 0.03 # Hip joint (RR)
+  - 0.06 # Thigh joint (RR)
+  - 0.06 # Calf joint (RR)
+  - 0.03 # Hip joint (RL)
+  - 0.06 # Thigh joint (RL)
+  - 0.06 # Calf joint (RL)
+  - 0.0  # Z1 joint1
+  - 0.0  # Z1 joint2
+  - 0.0  # Z1 joint3
+  - 0.0  # Z1 joint4
+
+# ============================
+# Cost Function Parameters
+# ============================
+
+# Diagonal entries of the 45 x 45 state cost matrix Q.
+Q_diag:
+  - 2000.0    # Base x position
+  - 2000.0    # Base y position
+  - 1000.0  # Base z position
+  - 20000.0 # Base quaternion distance
+  - 0.0     # Quaternion component
+  - 0.0     # Quaternion component
+  - 0.0     # Quaternion component
+  - 500.0   # FR hip position
+  - 500.0   # FR thigh position
+  - 500.0   # FR calf position
+  - 500.0   # FL hip position
+  - 500.0   # FL thigh position
+  - 500.0   # FL calf position
+  - 500.0   # RR hip position
+  - 500.0   # RR thigh position
+  - 500.0   # RR calf position
+  - 500.0   # RL hip position
+  - 500.0   # RL thigh position
+  - 500.0   # RL calf position
+  - 800.0   # Z1 joint1 position
+  - 800.0   # Z1 joint2 position
+  - 800.0   # Z1 joint3 position
+  - 800.0   # Z1 joint4 position
+  - 2.0     # Base linear velocity x
+  - 2.0     # Base linear velocity y
+  - 5.0     # Base linear velocity z
+  - 5.0     # Base angular velocity x
+  - 5.0     # Base angular velocity y
+  - 5.0     # Base angular velocity z
+  - 0.2     # FR hip velocity
+  - 0.2     # FR thigh velocity
+  - 0.2     # FR calf velocity
+  - 0.2     # FL hip velocity
+  - 0.2     # FL thigh velocity
+  - 0.2     # FL calf velocity
+  - 0.2     # RR hip velocity
+  - 0.2     # RR thigh velocity
+  - 0.2     # RR calf velocity
+  - 0.2     # RL hip velocity
+  - 0.2     # RL thigh velocity
+  - 0.2     # RL calf velocity
+  - 0.5     # Z1 joint1 velocity
+  - 0.5     # Z1 joint2 velocity
+  - 0.5     # Z1 joint3 velocity
+  - 0.5     # Z1 joint4 velocity
+
+# ============================
+# Control Cost Matrix R
+# ============================
+
+# Diagonal entries of the 16 x 16 virtual PD-effort cost matrix R.
+R_diag:
+  - 0.01 # Hip joint (FR)
+  - 0.01 # Thigh joint (FR)
+  - 0.01 # Calf joint (FR)
+  - 0.01 # Hip joint (FL)
+  - 0.01 # Thigh joint (FL)
+  - 0.01 # Calf joint (FL)
+  - 0.01 # Hip joint (RR)
+  - 0.01 # Thigh joint (RR)
+  - 0.01 # Calf joint (RR)
+  - 0.01 # Hip joint (RL)
+  - 0.01 # Thigh joint (RL)
+  - 0.01 # Calf joint (RL)
+  - 0.02 # Z1 joint1
+  - 0.02 # Z1 joint2
+  - 0.02 # Z1 joint3
+  - 0.02 # Z1 joint4
+
+# Virtual actuator effort: kp * (u - q) - kd * dq.
+virtual_pd_gains:
+  kp: 50.0
+  kd: 3.0
