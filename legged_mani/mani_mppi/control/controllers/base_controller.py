@@ -77,7 +77,8 @@ class BaseMPPI:
             if not np.isfinite(self.sampling_init).all():
                 raise ValueError("sampling_init must be finite")
 
-        self.noise_sigma = np.asarray(self.params["noise_sigma"], dtype=float)
+        self.base_noise_sigma = self._build_noise_sigma(self.params["noise_sigma"])
+        self.noise_sigma = self.base_noise_sigma.copy()
         if self.noise_sigma.shape != (self.act_dim,):
             raise ValueError(
                 f"noise_sigma must have {self.act_dim} entries, got {self.noise_sigma.shape}"
@@ -98,6 +99,51 @@ class BaseMPPI:
         self.rollout_func = self.rollout_actions
         self.cost_func = None
         self.reset_planner()
+
+    def _build_noise_sigma(self, config) -> np.ndarray:
+        """Build one exploration stddev for every model actuator."""
+        if not isinstance(config, dict):
+            sigma = np.asarray(config, dtype=float)
+            if sigma.shape != (self.act_dim,):
+                raise ValueError(
+                    f"noise_sigma must have {self.act_dim} entries, got {sigma.shape}"
+                )
+            return sigma
+
+        required = ("hip", "thigh", "calf", "arm")
+        missing = [name for name in required if name not in config]
+        if missing:
+            raise ValueError(f"noise_sigma is missing actuator groups: {missing}")
+
+        sigma = []
+        for actuator_id in range(self.act_dim):
+            name = mujoco.mj_id2name(
+                self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id
+            )
+            if name.endswith("_hip"):
+                group = "hip"
+            elif name.endswith("_thigh"):
+                group = "thigh"
+            elif name.endswith("_calf"):
+                group = "calf"
+            elif name.startswith("joint"):
+                group = "arm"
+            else:
+                raise ValueError(f"Unknown actuator group for '{name}'")
+            sigma.append(float(config[group]))
+
+        sigma = np.asarray(sigma, dtype=float)
+        if not np.isfinite(sigma).all() or np.any(sigma < 0.0):
+            raise ValueError("noise_sigma values must be finite and non-negative")
+        return sigma
+
+    def set_noise_for_gait(self, gait_name: str) -> None:
+        """Apply the configured scalar exploration scale for a gait."""
+        scales = self.params.get("gait_noise_scale", {})
+        scale = float(scales.get(gait_name, 1.0))
+        if not np.isfinite(scale) or scale < 0.0:
+            raise ValueError(f"Invalid gait noise scale for '{gait_name}': {scale}")
+        self.noise_sigma = self.base_noise_sigma * scale
 
     def reset_planner(self) -> None:
         self.trajectory = np.repeat(

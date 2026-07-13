@@ -74,22 +74,16 @@ desired_angular_velocity: [0.0, 0.0, 0.0]
 # Noise Parameters
 # ============================
 noise_sigma:
-  - 0.06 # Hip joint (FR)
-  - 0.1  # Thigh joint (FR)
-  - 0.1  # Calf joint (FR)
-  - 0.06 # Hip joint (FL)
-  - 0.1  # Thigh joint (FL)
-  - 0.1  # Calf joint (FL)
-  - 0.06 # Hip joint (RR)
-  - 0.1  # Thigh joint (RR)
-  - 0.1  # Calf joint (RR)
-  - 0.06 # Hip joint (RL)
-  - 0.1  # Thigh joint (RL)
-  - 0.1  # Calf joint (RL)
-  - 0.0  # Z1 joint1
-  - 0.0  # Z1 joint2
-  - 0.0  # Z1 joint3
-  - 0.0  # Z1 joint4
+  hip: 0.06
+  thigh: 0.1
+  calf: 0.1
+  arm: 0.0
+
+gait_noise_scale:
+  in_place: 1.5
+  walk: 1.5
+  walk_fast: 1.5
+  trot: 2.0
 
 # ============================
 # Cost Function Parameters
@@ -102,22 +96,22 @@ Q_diag:
   - 0.0     # Quaternion component
   - 0.0     # Quaternion component
   - 0.0     # Quaternion component
-  - 800.0   # FR hip position
-  - 800.0   # FR thigh position
-  - 800.0   # FR calf position
-  - 800.0   # FL hip position
-  - 800.0   # FL thigh position
-  - 800.0   # FL calf position
-  - 800.0   # RR hip position
-  - 800.0   # RR thigh position
-  - 800.0   # RR calf position
-  - 800.0   # RL hip position
-  - 800.0   # RL thigh position
-  - 800.0   # RL calf position
-  - 800.0   # Z1 joint1 position
-  - 800.0   # Z1 joint2 position
-  - 800.0   # Z1 joint3 position
-  - 800.0   # Z1 joint4 position
+  - 1000.0   # FR hip position
+  - 1000.0   # FR thigh position
+  - 1000.0   # FR calf position
+  - 1000.0   # FL hip position
+  - 1000.0   # FL thigh position
+  - 1000.0   # FL calf position
+  - 1000.0   # RR hip position
+  - 1000.0   # RR thigh position
+  - 1000.0   # RR calf position
+  - 1000.0   # RL hip position
+  - 1000.0   # RL thigh position
+  - 1000.0   # RL calf position
+  - 1000.0   # Z1 joint1 position
+  - 1000.0   # Z1 joint2 position
+  - 1000.0   # Z1 joint3 position
+  - 1000.0   # Z1 joint4 position
   - 1.0     # Base linear velocity x
   - 0.0001  # Base linear velocity y
   - 0.0001  # Base linear velocity z
@@ -161,7 +155,3 @@ R_diag:
   - 0.001
   - 0.001
   - 0.001
-
-virtual_pd_gains:
-  kp: 50.0
-  kd: 3.0

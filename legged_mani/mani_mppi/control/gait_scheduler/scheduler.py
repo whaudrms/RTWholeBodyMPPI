@@ -1,117 +1,130 @@
-"""Cyclic 32-row B2-Z1 joint reference scheduler."""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-import mujoco
 import numpy as np
 
+class GaitScheduler:
+    """
+    A class for managing gait schedules for a quadruped robot.
 
-class JointReferenceScheduler:
-    """Schedule ``[16 joint positions, 16 joint velocities]`` references."""
+    Attributes:
+    -----------
+    gait : np.ndarray
+        A 2D array representing the gait pattern loaded from a file.
+        Each row corresponds to a leg, and each column represents a timestep.
+    phase_length : int
+        Number of phases in the gait pattern.
+    phase_time : int
+        The current phase time index.
+    indices : np.ndarray
+        An array of phase indices for reference during rolling.
+    type : str
+        The name/type of the gait (e.g., 'walk', 'trot').
 
-    POSITION_DIM = 16
-    VELOCITY_DIM = 16
-    REFERENCE_DIM = POSITION_DIM + VELOCITY_DIM
+    Methods:
+    --------
+    roll():
+        Advances the gait to the next phase by incrementing the phase time
+        and updating the phase indices.
+    get_current_ref():
+        Returns the current reference values (gait states) for all legs
+        at the current phase.
+    """
 
-    def __init__(self, reference: np.ndarray, name: str = "in_place", phase: int = 0):
-        reference = np.asarray(reference, dtype=float)
-        if reference.ndim != 2 or reference.shape[0] != self.REFERENCE_DIM:
-            raise ValueError(
-                "Joint reference must have shape (32, cycle_steps), "
-                f"got {reference.shape}"
-            )
-        if reference.shape[1] < 1 or not np.isfinite(reference).all():
-            raise ValueError("Joint reference must be non-empty and finite")
-        self.reference = reference.copy()
-        self.name = name
-        self.phase = int(phase) % self.cycle_steps
+    def __init__(self, gait_path, name='walk', phase_time=0):
+        """
+        Initializes the GaitScheduler with a gait pattern file.
 
-    @property
-    def cycle_steps(self) -> int:
-        return self.reference.shape[1]
+        Parameters:
+        -----------
+        gait_path : str
+            Path to the file containing the gait pattern (tab-delimited).
+        name : str, optional
+            The name of the gait type. Default is 'walk'.
+        phase_time : int, optional
+            Initial phase time index. Default is 0.
+        """
+        # Load the configuration file
+        with open(gait_path, 'r') as file:
+            gait_array = np.loadtxt(file, delimiter='\t')
+        
+        # Initialize attributes
+        self.gait = gait_array
+        self.phase_length = gait_array.shape[1]
+        self.phase_time = phase_time
+        self.indices = np.arange(self.phase_length)
+        self.type = name
+        
+    def roll(self):
+        """
+        Advances the gait to the next phase.
+        Increments the phase time and rotates the phase indices.
+        """
+        self.phase_time += 1
+        self.indices = np.roll(self.indices, -1)
+    
+    def get_current_ref(self):
+        """
+        Retrieves the current reference values for all legs
+        based on the current phase time.
 
-    # Compatibility names used by the original mppi_locomotion.py.
-    @property
-    def gait(self) -> np.ndarray:
-        return self.reference
-
-    @property
-    def indices(self) -> np.ndarray:
-        return (self.phase + np.arange(self.cycle_steps)) % self.cycle_steps
-
-    @classmethod
-    def from_tsv(
-        cls, path: str | Path, name: str = "gait", phase: int = 0
-    ) -> "JointReferenceScheduler":
-        reference = np.loadtxt(Path(path), delimiter="\t")
-        return cls(reference, name=name, phase=phase)
-
-    @classmethod
-    def from_keyframe(
-        cls,
-        model: mujoco.MjModel,
-        keyframe: str = "stand",
-        cycle_steps: int = 100,
-        name: str = "in_place",
-    ) -> "JointReferenceScheduler":
-        if cycle_steps < 1:
-            raise ValueError("cycle_steps must be at least 1")
-        key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, keyframe)
-        if key_id < 0:
-            raise ValueError(f"Unknown joint-reference keyframe: {keyframe}")
-        joint_position = model.key_ctrl[key_id].copy()
-        if joint_position.shape != (cls.POSITION_DIM,):
-            raise ValueError(
-                f"Expected 16 keyframe controls, got {joint_position.shape}"
-            )
-        one_step = np.concatenate((joint_position, np.zeros(cls.VELOCITY_DIM)))
-        reference = np.repeat(one_step[:, None], cycle_steps, axis=1)
-        return cls(reference, name=name)
-
-    def horizon(self, length: int) -> np.ndarray:
-        """Return a wrapped reference with shape ``(32, length)``."""
-        if length < 1:
-            raise ValueError("Reference horizon length must be at least 1")
-        indices = (self.phase + np.arange(length)) % self.cycle_steps
-        return self.reference[:, indices]
-
-    def advance(self, steps: int = 1) -> None:
-        if steps < 0:
-            raise ValueError("Reference advance must be non-negative")
-        self.phase = (self.phase + steps) % self.cycle_steps
-
-    def roll(self) -> None:
-        """Original scheduler API: advance one control step."""
-        self.advance(1)
-
-    def get_current_ref(self) -> np.ndarray:
-        return self.reference[:, self.phase]
-
-    def reset(self, phase: int = 0) -> None:
-        self.phase = int(phase) % self.cycle_steps
-
-
-# Original controller name retained for source-compatible imports.
-GaitScheduler = JointReferenceScheduler
+        Returns:
+        --------
+        np.ndarray:
+            The current gait states for all legs at the current phase.
+        """
+        return self.gait[:, self.phase_time] 
 
 
 class Timer:
-    """Small phase timer retained from the original gait scheduler."""
+    """
+    A class to manage timing for tasks or phases in a simulation.
 
-    def __init__(self, init_time: int = 0, end_time: int = 300):
+    Attributes:
+    -----------
+    elapsed_time : int
+        The current elapsed time.
+    end_time : int
+        The time at which the timer completes.
+    done : bool
+        A flag indicating whether the timer has finished.
+    waiting : bool
+        A flag for indicating if the timer is paused or waiting.
+
+    Methods:
+    --------
+    increment():
+        Advances the timer by one time step.
+    reset():
+        Resets the timer to its initial state.
+    """
+
+    def __init__(self, init_time=0, end_time=300):
+        """
+        Initializes the Timer with optional start and end times.
+
+        Parameters:
+        -----------
+        init_time : int, optional
+            The initial time value. Default is 0.
+        end_time : int, optional
+            The end time value when the timer should stop. Default is 300.
+        """
         self.elapsed_time = init_time
         self.end_time = end_time
         self.done = False
         self.waiting = False
-
-    def increment(self) -> None:
+        
+    def increment(self):
+        """
+        Advances the timer by one time step.
+        Marks the timer as 'done' if the elapsed time reaches the end time.
+        """
         if self.elapsed_time < self.end_time:
             self.elapsed_time += 1
         else:
             self.done = True
-
-    def reset(self) -> None:
-        self.elapsed_time = 0
+    
+    def reset(self):
+        """
+        Resets the timer to its initial state.
+        """
+        self.elapsed_time = 0 
         self.done = False

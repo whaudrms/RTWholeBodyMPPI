@@ -1,0 +1,13 @@
+<mujoco model="b2_z1_mppi_rollout">
+  <!-- Rollout model: same B2-Z1 robot plus the contact floor. -->
+  <include file="b2_z1_4dof.xml"/>
+
+  <worldbody>
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
+          material="rollout_ground" friction="0.8 0.02 0.01" condim="6"/>
+  </worldbody>
+
+  <asset>
+    <material name="rollout_ground" rgba="0.2 0.3 0.4 1"/>
+  </asset>
+</mujoco>

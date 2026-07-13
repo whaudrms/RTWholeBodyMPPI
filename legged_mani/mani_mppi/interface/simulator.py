@@ -57,10 +57,17 @@ class Simulator:
         self.save_frames = save_frames
         self.save_dir = save_dir
         # rollout
-        mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos = self.model.key_qpos[1]
-        self.data.qvel = self.model.key_qvel[1]
-        self.data.ctrl = self.model.key_ctrl[1]
+        keyframe_name = "stand"
+        if agent is not None:
+            keyframe_name = agent.params.get("keyframe", keyframe_name)
+        keyframe_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_KEY, keyframe_name
+        )
+        if keyframe_id < 0:
+            raise ValueError(f"Unknown simulator keyframe: {keyframe_name}")
+        mujoco.mj_resetDataKeyframe(self.model, self.data, keyframe_id)
+        self.data.ctrl = self.model.key_ctrl[keyframe_id]
+        mujoco.mj_forward(self.model, self.data)
 
         # viewer
         if viewer:

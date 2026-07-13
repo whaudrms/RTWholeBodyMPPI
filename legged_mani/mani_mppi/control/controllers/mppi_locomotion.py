@@ -17,9 +17,9 @@ GAIT_DIR = os.path.join(BASE_DIR, "../gait_scheduler/gaits/")
 # Paths for gait files
 ### must generate gait data ###
 GAIT_INPLACE_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv") 
-GAIT_TROT_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv")
-GAIT_WALK_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv")
-GAIT_WALK_FAST_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv")
+GAIT_TROT_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv")
+GAIT_WALK_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv")
+GAIT_WALK_FAST_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv")
 
 class MPPI(BaseMPPI):
     """
@@ -77,10 +77,10 @@ class MPPI(BaseMPPI):
 
         # Initialize gait schedulers
         self.gaits = {
-            'in_place': GaitScheduler.from_tsv(GAIT_INPLACE_PATH, name='in_place'),
-            'trot': GaitScheduler.from_keyframe(self.model, name='trot'),
-            'walk': GaitScheduler.from_keyframe(self.model, name='walk'),
-            'walk_fast': GaitScheduler.from_tsv(GAIT_WALK_FAST_PATH, name='walk_fast')
+            'in_place': GaitScheduler(gait_path=GAIT_INPLACE_PATH, name='in_place'),
+            'trot': GaitScheduler(gait_path=GAIT_TROT_PATH, name='trot'),
+            'walk': GaitScheduler(gait_path=GAIT_WALK_PATH, name='walk'),
+            'walk_fast': GaitScheduler(gait_path=GAIT_WALK_FAST_PATH, name='walk_fast')
         }
         self.gait_scheduler = self.gaits['in_place']
 
@@ -93,6 +93,7 @@ class MPPI(BaseMPPI):
                                         np.zeros(4)))
         
         self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
+        self.set_noise_for_gait(self.desired_gait[self.goal_index])
         self.task_success = False
 
         # Debug information
@@ -127,10 +128,7 @@ class MPPI(BaseMPPI):
             self.timer.waiting = True
 
         if not self.task_success:
-            if self.desired_gait[self.goal_index] in ['in_place', 'walk', 'walk_fast']:
-                self.noise_sigma = np.array([0.06, 0.1, 0.1] * 4)
-            elif self.desired_gait[self.goal_index] in ['trot']:
-                self.noise_sigma = np.array([0.06, 0.2, 0.2] * 4)
+            self.set_noise_for_gait(self.desired_gait[self.goal_index])
         
     def update(self, obs):
         """
@@ -146,12 +144,18 @@ class MPPI(BaseMPPI):
         self.obs = obs
 
         # Calculate the direction and distance to the goal
-        direction = self.body_ref[:3] - obs[:3]
-        goal_delta = np.linalg.norm(direction)
+        horizontal_direction = self.body_ref[:2] - obs[:2]
+        goal_delta = np.linalg.norm(horizontal_direction)
 
         # Update desired orientation based on the goal position
         if goal_delta > 0.1 and not self.timer.waiting:
-            self.goal_ori = calculate_orientation_quaternion(obs[:3], self.body_ref[:3])
+            current_horizontal = np.array([obs[0], obs[1], 0.0])
+            target_horizontal = np.array(
+                [self.body_ref[0], self.body_ref[1], 0.0]
+            )
+            self.goal_ori = calculate_orientation_quaternion(
+                current_horizontal, target_horizontal
+            )
         else:
             self.goal_ori = np.array([1, 0, 0, 0])
 
