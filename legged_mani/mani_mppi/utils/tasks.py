@@ -42,7 +42,7 @@ TASKS = {
         "sim_path": DEFAULT_SIM_PATH
     },
     "stand": {
-        "goal_pos": [[0, 0, 0.27]],
+        "goal_pos": [[0, 0, 0.5]],
         "default_orientation": DEFAULT_ORIENTATION,
         "cmd_vel": [[0.0, 0.0]],
         "goal_thresh": [0.2],
