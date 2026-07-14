@@ -40,7 +40,7 @@ sampling_init:
 # Model Parameters for Contact Dynamics
 # ============================
 o_solref:
-  - 0.04           # Time constant for contact model (stiffness control).
+  - 0.02           # Time constant for contact model (stiffness control).
   - 1.0            # Damping ratio for the contact model.
 rollout_cone: "pyramidal"
 
@@ -73,10 +73,10 @@ noise_sigma:
   - 0.0  # Z1 joint4
 
 gait_noise_scale:
-  in_place: 1.5
-  walk: 1.5
-  walk_fast: 1.5
-  trot: 2.0
+  in_place: 1.0
+  walk: 1.0
+  walk_fast: 1.0
+  trot: 1.2
 
 # ============================
 # Cost Function Parameters
@@ -135,23 +135,19 @@ Q_diag:
 # ============================
 # Penalizes excessive control effort (torque commands).
 R_diag:
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-  - 0.0001
-
-virtual_pd_gains:
-  kp: 30.0
-  kd: 6.0
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001

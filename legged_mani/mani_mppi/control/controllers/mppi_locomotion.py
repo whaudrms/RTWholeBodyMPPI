@@ -229,9 +229,11 @@ class MPPI(BaseMPPI):
         Returns:
             np.ndarray: Computed cost for each sample.
         """
-        gains = self.params.get("virtual_pd_gains", {})
-        kp = float(gains.get("kp", 50.0))
-        kd = float(gains.get("kd", 3.0))
+        # Match the PD law encoded by each MuJoCo actuator.  For the B2-Z1
+        # model, biasprm[2] stores the negative damping coefficient:
+        # torque = gainprm[0] * (ctrl - q) - kd * qvel.
+        kp = np.asarray(self.model.actuator_gainprm[:, 0], dtype=float)
+        kd = -np.asarray(self.model.actuator_biasprm[:, 2], dtype=float)
 
         # Compute state error relative to the reference
         x_error = x - x_ref
@@ -247,7 +249,7 @@ class MPPI(BaseMPPI):
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
         uv = x_ref[:, 29:45]
-        u_error = kp * (u - x_joint) - kd *(uv - v_joint)
+        u_error = kp * (u - x_joint) - kd * (v_joint - uv)
 
         # Compute positional cost (L1 norm for positional error)
         x_error[:, :3] = 0  # Ignore positional error for simplicity

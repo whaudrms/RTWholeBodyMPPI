@@ -23,7 +23,7 @@ def main(task):
     CTRL_N_SAMPLES = 30
 
     # Soft contact model paramters
-    TIMECONST = 0.04
+    TIMECONST = 0.02
     DAMPINGRATIO = 1.0
     
 

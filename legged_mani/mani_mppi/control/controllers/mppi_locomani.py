@@ -17,16 +17,16 @@ GAIT_DIR = os.path.join(BASE_DIR, "../gait_scheduler/gaits/")
 # Paths for gait files
 ### must generate gait data ###
 GAIT_INPLACE_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_0_10cm_100hz.tsv"
 )
 GAIT_TROT_PATH = os.path.join(
-    GAIT_DIR, "MED/b2_z1_trot_MED_0_5_15cm_100hz.tsv"
+    GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_5_15cm_100hz.tsv"
 )
 GAIT_WALK_PATH = os.path.join(
-    GAIT_DIR, "MED/b2_z1_walk_MED_0_1_10cm_100hz.tsv"
+    GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_1_10cm_100hz.tsv"
 )
 GAIT_WALK_FAST_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv"
 )
 
 class MPPI(BaseMPPI):
@@ -229,9 +229,11 @@ class MPPI(BaseMPPI):
         Returns:
             np.ndarray: Computed cost for each sample.
         """
-        gains = self.params.get("virtual_pd_gains", {})
-        kp = float(gains.get("kp", 50.0))
-        kd = float(gains.get("kd", 3.0))
+        # Match the PD law encoded by each MuJoCo actuator.  For the B2-Z1
+        # model, biasprm[2] stores the negative damping coefficient:
+        # torque = gainprm[0] * (ctrl - q) - kd * qvel.
+        kp = np.asarray(self.model.actuator_gainprm[:, 0], dtype=float)
+        kd = -np.asarray(self.model.actuator_biasprm[:, 2], dtype=float)
 
         # Compute state error relative to the reference
         x_error = x - x_ref
@@ -246,7 +248,8 @@ class MPPI(BaseMPPI):
         # Compute joint and velocity errors
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
-        u_error = kp * (u - x_joint) - kd * v_joint
+        uv = x_ref[:, 29:45]
+        u_error = kp * (u - x_joint) - kd * (v_joint - uv)
 
         # Compute positional cost (L1 norm for positional error)
         x_error[:, :3] = 0  # Ignore positional error for simplicity
@@ -296,12 +299,7 @@ class MPPI(BaseMPPI):
 
         # B2-Z1 state order: base qpos, 16 joint q, base dq, 16 joint dq.
         x_ref = np.concatenate(
-            [
-                traj_body_ref[:, :7],
-                joints_ref[:, :16],
-                base_velocity_ref,
-                joints_ref[:, 16:],
-            ],
+            [traj_body_ref[:, :7], joints_ref[:, :16], base_velocity_ref, joints_ref[:, 16:],],
             axis=1,
         )
 
@@ -326,15 +324,14 @@ class MPPI(BaseMPPI):
         if self.obs is None:
             # If no observation is available, return None
             return None
-        else:
-            best_actions = np.repeat(
-                self.selected_trajectory[None, :, :], self.n_samples, axis=0
-            )
-            best_rollouts = self.rollout_func(self.obs, best_actions)[:1]
-        # Compute and return the cost of the best trajectory
+
+        best_actions = self.selected_trajectory[None, :, :]
+
+        best_rollouts = self.rollout_func(self.obs, best_actions,)
+
         return self.cost_func(
             best_rollouts,
-            best_actions[:1],
+            best_actions,
             self.joints_ref,
             self.body_ref,
         )[0]

@@ -50,19 +50,23 @@ TASKS = {
         "desired_gait": ['in_place'],
         "waiting_times": [0],
         "model_path": DEFAULT_MODEL_PATH,
-        "config_path": 'configs/mppi_locomotion.yml',
-        "sim_path": DEFAULT_SIM_PATH
-    },
-    "mani": {
-        "goal_pos": [[0, 0, 0.5]],
-        "default_orientation": DEFAULT_ORIENTATION,
-        "cmd_vel": [[0.0, 0.0]],
-        "goal_thresh": [0.2],
-        "desired_gait": ['in_place'],
-        "waiting_times": [0],
-        "model_path": DEFAULT_MODEL_PATH,
         "config_path": DEFAULT_CONFIG_PATH,
         "sim_path": DEFAULT_SIM_PATH
+    },
+    "locomani": {
+        "goal_pos": [[0, 0, 0.5]],
+        "cmd_vel": [[0.0, 0.0]],
+        "desired_gait": ["in_place"],
+        "goal_thresh": [0.1],
+        "waiting_times": [0],
+
+        "ee_site": "gripper_center",
+        "ee_goal_pos": [[0.7, 0.0, 0.6]],
+        "ee_goal_quat": [[1, 0, 0, 0]],
+
+        "model_path": DEFAULT_MODEL_PATH,
+        "config_path": "configs/mppi_locomani.yml",
+        "sim_path": DEFAULT_SIM_PATH,
     },
 }
 
