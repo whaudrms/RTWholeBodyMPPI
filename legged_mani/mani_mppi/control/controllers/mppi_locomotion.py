@@ -16,10 +16,18 @@ GAIT_DIR = os.path.join(BASE_DIR, "../gait_scheduler/gaits/")
 
 # Paths for gait files
 ### must generate gait data ###
-GAIT_INPLACE_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv") 
-GAIT_TROT_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv")
-GAIT_WALK_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv")
-GAIT_WALK_FAST_PATH = os.path.join(GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv")
+GAIT_INPLACE_PATH = os.path.join(
+    GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv"
+)
+GAIT_TROT_PATH = os.path.join(
+    GAIT_DIR, "MED/b2_z1_trot_MED_0_5_15cm_100hz.tsv"
+)
+GAIT_WALK_PATH = os.path.join(
+    GAIT_DIR, "MED/b2_z1_walk_MED_0_1_10cm_100hz.tsv"
+)
+GAIT_WALK_FAST_PATH = os.path.join(
+    GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv"
+)
 
 class MPPI(BaseMPPI):
     """
