@@ -56,18 +56,18 @@ Q_diag:
   - 0      # -
   - 0      # -
   - 0      # -
-  - 800    # Hip joint (FR)
-  - 800    # Thigh joint (FR)
-  - 800    # Calf joint (FR)
-  - 800    # Hip joint (FL)
-  - 800    # Thigh joint (FL)
-  - 800    # Calf joint (FL)
-  - 800    # Hip joint (RR)
-  - 800    # Thigh joint (RR)
-  - 800    # Calf joint (RR)
-  - 800    # Hip joint (RL)
-  - 800    # Thigh joint (RL)
-  - 800    # Calf joint (RL)
+  - 8000    # Hip joint (FR)
+  - 8000    # Thigh joint (FR)
+  - 8000    # Calf joint (FR)
+  - 8000    # Hip joint (FL)
+  - 8000    # Thigh joint (FL)
+  - 8000    # Calf joint (FL)
+  - 8000    # Hip joint (RR)
+  - 8000    # Thigh joint (RR)
+  - 8000    # Calf joint (RR)
+  - 8000    # Hip joint (RL)
+  - 8000    # Thigh joint (RL)
+  - 8000    # Calf joint (RL)
   - 1      # x velocity
   - 0.0001 # y velocity
   - 0.0001 # z velocity

@@ -17,16 +17,16 @@ GAIT_DIR = os.path.join(BASE_DIR, "../gait_scheduler/gaits/")
 # Paths for gait files
 ### must generate gait data ###
 GAIT_INPLACE_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_0_10cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_z1_in_place_FAST_0_0_10cm_100hz.tsv"
 )
 GAIT_TROT_PATH = os.path.join(
-    GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_5_15cm_100hz.tsv"
+    GAIT_DIR, "MED/b2_z1_trot_MED_0_5_15cm_100hz.tsv"
 )
 GAIT_WALK_PATH = os.path.join(
-    GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_1_10cm_100hz.tsv"
+    GAIT_DIR, "MED/b2_z1_walk_MED_0_1_10cm_100hz.tsv"
 )
 GAIT_WALK_FAST_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_z1_walk_fast_FAST_0_1_10cm_100hz.tsv"
 )
 
 class MPPI(BaseMPPI):
@@ -246,8 +246,7 @@ class MPPI(BaseMPPI):
         # Compute joint and velocity errors
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
-        uv = x_ref[:, 29:45]
-        u_error = kp * (u - x_joint) - kd *(uv - v_joint)
+        u_error = kp * (u - x_joint) - kd * v_joint
 
         # Compute positional cost (L1 norm for positional error)
         x_error[:, :3] = 0  # Ignore positional error for simplicity
@@ -297,7 +296,12 @@ class MPPI(BaseMPPI):
 
         # B2-Z1 state order: base qpos, 16 joint q, base dq, 16 joint dq.
         x_ref = np.concatenate(
-            [traj_body_ref[:, :7], joints_ref[:, :16], base_velocity_ref, joints_ref[:, 16:],],
+            [
+                traj_body_ref[:, :7],
+                joints_ref[:, :16],
+                base_velocity_ref,
+                joints_ref[:, 16:],
+            ],
             axis=1,
         )
 
@@ -322,14 +326,15 @@ class MPPI(BaseMPPI):
         if self.obs is None:
             # If no observation is available, return None
             return None
-
-        best_actions = self.selected_trajectory[None, :, :]
-
-        best_rollouts = self.rollout_func(self.obs, best_actions,)
-
+        else:
+            best_actions = np.repeat(
+                self.selected_trajectory[None, :, :], self.n_samples, axis=0
+            )
+            best_rollouts = self.rollout_func(self.obs, best_actions)[:1]
+        # Compute and return the cost of the best trajectory
         return self.cost_func(
             best_rollouts,
-            best_actions,
+            best_actions[:1],
             self.joints_ref,
             self.body_ref,
         )[0]

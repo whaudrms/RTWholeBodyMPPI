@@ -15,23 +15,23 @@ Each task is represented as a dictionary containing key parameters:
 
 # MPPI rollouts must use the same contact environment as the simulator.
 DEFAULT_MODEL_PATH = 'models/b2_z1_base.xml'
-DEFAULT_CONFIG_PATH = 'configs/mppi_locomotion_in_place.yml'
+DEFAULT_CONFIG_PATH = 'configs/mppi_locomotion.yml'
 DEFAULT_SIM_PATH = 'models/scene.xml'
 DEFAULT_ORIENTATION = [[1, 0, 0, 0]]
 
 
 TASKS = {
     "walk_straight": {
-        "goal_pos": [[0, 0, 0.543542], 
-                     [1, 0, 0.543542], 
-                     [1, 0, 0.543542]],
+        "goal_pos": [[0, 0, 0.5], 
+                     [1, 0, 0.5], 
+                     [2, 0, 0.5]],
         "default_orientation": DEFAULT_ORIENTATION,
         "cmd_vel": [[0.0, 0.0], 
                     [0.2, 0.0], 
                     [0.0, 0.0]],
-        "goal_thresh": [0.05, 
+        "goal_thresh": [0.2, 
                         0.2, 
-                        0.05],
+                        0.2],
         "desired_gait": ['in_place', 
                          'walk_fast', 
                          'in_place'],
@@ -43,10 +43,21 @@ TASKS = {
         "sim_path": DEFAULT_SIM_PATH
     },
     "stand": {
-        "goal_pos": [[0, 0, 0.543542]],
+        "goal_pos": [[0, 0, 0.5]],
         "default_orientation": DEFAULT_ORIENTATION,
         "cmd_vel": [[0.0, 0.0]],
-        "goal_thresh": [0.05],
+        "goal_thresh": [0.2],
+        "desired_gait": ['in_place'],
+        "waiting_times": [0],
+        "model_path": DEFAULT_MODEL_PATH,
+        "config_path": 'configs/mppi_locomotion.yml',
+        "sim_path": DEFAULT_SIM_PATH
+    },
+    "mani": {
+        "goal_pos": [[0, 0, 0.5]],
+        "default_orientation": DEFAULT_ORIENTATION,
+        "cmd_vel": [[0.0, 0.0]],
+        "goal_thresh": [0.2],
         "desired_gait": ['in_place'],
         "waiting_times": [0],
         "model_path": DEFAULT_MODEL_PATH,

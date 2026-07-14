@@ -185,14 +185,37 @@ class BaseMPPI:
 
     def rollout_actions(self, observation: np.ndarray, controls: np.ndarray) -> np.ndarray:
         observation = np.asarray(observation, dtype=float)
+        controls = np.asarray(controls, dtype=float)
         expected = self.model.nq + self.model.nv
         if observation.shape != (expected,):
             raise ValueError(f"Expected observation shape {(expected,)}, got {observation.shape}")
-        initial = np.repeat(
-            np.concatenate(([0.0], observation))[None, :], self.n_samples, axis=0
+
+        if controls.ndim != 3 or controls.shape[1:] != (self.horizon, self.act_dim):
+            raise ValueError(
+                f"Expected controls shape (N, {self.horizon}, {self.act_dim}), "
+                f"got {controls.shape}"
+            )
+
+        n_rollouts = controls.shape[0]
+        if n_rollouts < 1:
+            raise ValueError("controls must contain at least one rollout")
+
+        full_state_dim = mujoco.mj_stateSize(
+            self.model, mujoco.mjtState.mjSTATE_FULLPHYSICS.value
         )
+        if n_rollouts == self.n_samples:
+            state_rollouts = self.state_rollouts
+        else:
+            state_rollouts = np.empty(
+                (n_rollouts, self.horizon, full_state_dim), dtype=float
+            )
+
+        initial = np.repeat(
+            np.concatenate(([0.0], observation))[None, :], n_rollouts, axis=0
+        )
+        n_workers = min(self.num_workers, n_rollouts)
         boundaries = np.linspace(
-            0, self.n_samples, self.num_workers + 1, dtype=int
+            0, n_rollouts, n_workers + 1, dtype=int
         )
         chunks = [
             slice(start, stop)
@@ -201,13 +224,16 @@ class BaseMPPI:
         ]
         futures = [
             self.executor.submit(
-                self._call_rollout, initial[index], controls[index], self.state_rollouts[index]
+                self._call_rollout,
+                initial[index],
+                controls[index],
+                state_rollouts[index],
             )
             for index in chunks
         ]
         for future in concurrent.futures.as_completed(futures):
             future.result()
-        return self.state_rollouts[:, :, 1:]
+        return state_rollouts[:, :, 1:]
 
     def close(self) -> None:
         if not self._closed:
