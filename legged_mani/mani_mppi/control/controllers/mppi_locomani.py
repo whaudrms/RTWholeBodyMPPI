@@ -1,344 +1,331 @@
+"""Whole-body MPPI controller for B2-Z1 locomani tasks."""
+
 import os
-import yaml
+
 import mujoco
 import numpy as np
+import yaml
 
-# Local imports (ensure these are part of your package structure)
-from mani_mppi.utils.tasks import get_task
 from mani_mppi.control.controllers.base_controller import BaseMPPI
-from mani_mppi.control.gait_scheduler.scheduler import GaitScheduler
-from mani_mppi.control.gait_scheduler.scheduler import Timer
-from mani_mppi.utils.transforms import batch_world_to_local_velocity, calculate_orientation_quaternion
+from mani_mppi.control.gait_scheduler.scheduler import GaitScheduler, Timer
+from mani_mppi.utils.tasks import get_task
+from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
-# Define base directory and paths for resource files
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GAIT_DIR = os.path.join(BASE_DIR, "../gait_scheduler/gaits/")
+GAIT_PATHS = {
+    "in_place": os.path.join(
+        GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_0_10cm_100hz.tsv"
+    ),
+    "trot": os.path.join(
+        GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_5_15cm_100hz.tsv"
+    ),
+    "walk": os.path.join(
+        GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_1_10cm_100hz.tsv"
+    ),
+    "walk_fast": os.path.join(
+        GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv"
+    ),
+}
 
-# Paths for gait files
-### must generate gait data ###
-GAIT_INPLACE_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_0_10cm_100hz.tsv"
-)
-GAIT_TROT_PATH = os.path.join(
-    GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_5_15cm_100hz.tsv"
-)
-GAIT_WALK_PATH = os.path.join(
-    GAIT_DIR, "MED/b2_z1/walking_gait_raibert_MED_0_1_10cm_100hz.tsv"
-)
-GAIT_WALK_FAST_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv"
-)
 
 class MPPI(BaseMPPI):
-    """
-    Model Predictive Path Integral (MPPI) Controller for quadruped robots.
+    """MPPI with internal body stabilization and EE-pose task goals."""
 
-    Attributes:
-        - Task-specific parameters and goals.
-        - Gait scheduler and configurations.
-        - MPPI sampling and cost calculation configurations.
-    """
-
-    def __init__(self, task='stand') -> None:
-        """
-        Initialize the MPPI controller with task-specific configurations.
-
-        Args:
-            task (str): The name of the task ('stand', 'walk').
-        """
+    def __init__(self, task="locomani") -> None:
         print("Task: ", task)
-
-        # Retrieve task-specific parameters
         self.task = task
         self.task_data = get_task(task)
 
-        self.goal_pos = self.task_data['goal_pos']
-        self.goal_ori = self.task_data['default_orientation'] 
-        self.cmd_vel = self.task_data['cmd_vel']
-        self.goal_thresh = self.task_data['goal_thresh']
-        self.desired_gait = self.task_data['desired_gait']
-        model_path = self.task_data['model_path'] 
-        config_path = self.task_data['config_path']
-        waiting_times = self.task_data['waiting_times']
+        self.ee_goal_pos = np.asarray(self.task_data["ee_goal_pos"], dtype=float)
+        self.ee_goal_quat = np.asarray(self.task_data["ee_goal_quat"], dtype=float)
+        if self.ee_goal_pos.ndim != 2 or self.ee_goal_pos.shape[1] != 3:
+            raise ValueError("ee_goal_pos must have shape (N, 3)")
+        if self.ee_goal_quat.shape != (len(self.ee_goal_pos), 4):
+            raise ValueError("ee_goal_quat must have shape (N, 4)")
 
-        # Dynamically resolve paths for model and configuration files
-        CONFIG_PATH = os.path.join(BASE_DIR, config_path)
-        MODEL_PATH = os.path.join(BASE_DIR, "../..", model_path)
+        self.ee_site_name = self.task_data.get("ee_site", "gripper_center")
+        self.ee_pos_thresh = float(self.task_data.get("ee_pos_thresh", 0.03))
+        self.ee_ori_thresh = float(self.task_data.get("ee_ori_thresh", 0.1))
 
-        # Initialize base MPPI
-        super().__init__(MODEL_PATH, CONFIG_PATH)
+        config_path = os.path.join(BASE_DIR, self.task_data["config_path"])
+        model_path = os.path.join(BASE_DIR, "../..", self.task_data["model_path"])
+        super().__init__(model_path, config_path)
 
-        # load the configuration file
-        with open(CONFIG_PATH, 'r') as file:
-            params = yaml.safe_load(file)
-        # Cost weights
-        self.Q = np.diag(np.array(params['Q_diag']))
-        self.R = np.diag(np.array(params['R_diag']))
+        with open(config_path, "r", encoding="utf-8") as stream:
+            params = yaml.safe_load(stream)
+        self.Q = np.diag(np.asarray(params["Q_diag"], dtype=float))
+        self.R = np.diag(np.asarray(params["R_diag"], dtype=float))
         self.cost_func = self.calculate_total_cost
 
-        # Set initial parameters and state
-        self.obs = None
+        self.ee_site_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_SITE, self.ee_site_name
+        )
+        if self.ee_site_id < 0:
+            raise ValueError(f"Unknown EE site: {self.ee_site_name}")
+
+        body_keyframe = params.get("body_reference_keyframe", "stand")
+        body_key_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_KEY, body_keyframe
+        )
+        if body_key_id < 0:
+            raise ValueError(f"Unknown body reference keyframe: {body_keyframe}")
+
+        self.body_ref = np.zeros(13, dtype=float)
+        self.body_ref[:7] = self.model.key_qpos[body_key_id][:7]
+
+        self.default_gait = params.get("default_gait", "in_place")
+        if self.default_gait not in GAIT_PATHS:
+            raise ValueError(f"Unknown default gait: {self.default_gait}")
+        self.gait_scheduler = GaitScheduler(
+            gait_path=GAIT_PATHS[self.default_gait], name=self.default_gait
+        )
+
+        self.arm_qpos_indices = self._joint_indices("qpos")
+        self.arm_dof_indices = self._joint_indices("dof")
+        self.ik_data = mujoco.MjData(self.model)
+        self.arm_ik_damping = float(params.get("arm_ik_damping", 0.05))
+        self.arm_ik_step_size = float(params.get("arm_ik_step_size", 0.7))
+        self.arm_ik_max_iterations = int(params.get("arm_ik_max_iterations", 100))
+        self.arm_ik_tolerance = float(params.get("arm_ik_tolerance", 1e-4))
+        self.arm_ik_smoothing = float(params.get("arm_ik_smoothing", 0.3))
+        self.arm_ik_max_step = float(params.get("arm_ik_max_step", 0.04))
+        self.arm_reference = self._solve_arm_ik(
+            self.ee_goal_pos[0],
+            self.model.key_qpos[body_key_id],
+            damping=self.arm_ik_damping,
+            step_size=self.arm_ik_step_size,
+            max_iterations=self.arm_ik_max_iterations,
+            tolerance=self.arm_ik_tolerance,
+            strict=True,
+        )
+
         self.internal_ref = True
-        self.exp_weights = np.ones(self.n_samples) / self.n_samples  # Initial MPPI weights
-        self.waiting_times = waiting_times
-        self.timer = Timer(end_time=self.waiting_times[0])
-
-        # Initialize gait schedulers
-        self.gaits = {
-            'in_place': GaitScheduler(gait_path=GAIT_INPLACE_PATH, name='in_place'),
-            'trot': GaitScheduler(gait_path=GAIT_TROT_PATH, name='trot'),
-            'walk': GaitScheduler(gait_path=GAIT_WALK_PATH, name='walk'),
-            'walk_fast': GaitScheduler(gait_path=GAIT_WALK_FAST_PATH, name='walk_fast')
-        }
-        self.gait_scheduler = self.gaits['in_place']
-
-        # Initialize planner and goals
-        self.reset_planner()
+        self.obs = None
         self.goal_index = 0
-        self.body_ref = np.concatenate((self.goal_pos[self.goal_index],
-                                        self.goal_ori[self.goal_index],
-                                        self.cmd_vel[self.goal_index],
-                                        np.zeros(4)))
-        
-        self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
-        self.set_noise_for_gait(self.desired_gait[self.goal_index])
         self.task_success = False
+        self.waiting_times = list(
+            self.task_data.get("waiting_times", [0] * len(self.ee_goal_pos))
+        )
+        if len(self.waiting_times) != len(self.ee_goal_pos):
+            raise ValueError("waiting_times must match the number of EE goals")
+        self.timer = Timer(end_time=self.waiting_times[0])
+        self.ee_data = mujoco.MjData(self.model)
+        self.exp_weights = np.ones(self.n_samples) / self.n_samples
 
-        # Debug information
-        print(f"Initial goal {self.goal_index}: {self.goal_pos[self.goal_index] }")
-        print(f"Initial gait {self.desired_gait[self.goal_index]}")
-    
+        self.reset_planner()
+        self.set_noise_for_gait(self.default_gait)
+        print(f"Body reference keyframe: {body_keyframe}")
+        print(f"Initial EE goal: {self.ee_goal_pos[0]}")
+        print(f"IK arm reference: {np.round(self.arm_reference, 4)}")
+
+    def _joint_indices(self, kind):
+        names = ("joint1", "joint2", "joint3", "joint4")
+        if kind == "qpos":
+            addresses = self.model.jnt_qposadr
+        else:
+            addresses = self.model.jnt_dofadr
+        return np.asarray(
+            [addresses[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)]
+             for name in names],
+            dtype=int,
+        )
+
+    def _solve_arm_ik(
+        self, target_pos, initial_qpos, damping, step_size, max_iterations, tolerance,
+        strict=False,
+    ):
+        """Solve a position-only damped-least-squares IK once per task goal."""
+        data = self.ik_data
+        data.qpos[:] = initial_qpos
+        data.qvel[:] = 0.0
+        joint_ids = [
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            for name in ("joint1", "joint2", "joint3", "joint4")
+        ]
+        lower = self.model.jnt_range[joint_ids, 0]
+        upper = self.model.jnt_range[joint_ids, 1]
+        jacp = np.zeros((3, self.model.nv))
+        jacr = np.zeros((3, self.model.nv))
+
+        for _ in range(max_iterations):
+            mujoco.mj_forward(self.model, data)
+            error = np.asarray(target_pos) - data.site_xpos[self.ee_site_id]
+            if np.linalg.norm(error) <= tolerance:
+                break
+            mujoco.mj_jacSite(self.model, data, jacp, jacr, self.ee_site_id)
+            jac = jacp[:, self.arm_dof_indices]
+            lhs = jac @ jac.T + (damping ** 2) * np.eye(3)
+            dq = jac.T @ np.linalg.solve(lhs, error)
+            data.qpos[self.arm_qpos_indices] = np.clip(
+                data.qpos[self.arm_qpos_indices] + step_size * dq,
+                lower,
+                upper,
+            )
+
+        mujoco.mj_forward(self.model, data)
+        residual = np.linalg.norm(data.site_xpos[self.ee_site_id] - target_pos)
+        self.last_ik_residual = residual
+        if strict and residual > max(0.03, 10.0 * tolerance):
+            raise ValueError(
+                f"EE target is not reachable by the 4-DoF arm; residual={residual:.4f} m"
+            )
+        return data.qpos[self.arm_qpos_indices].copy()
+
+    def _update_arm_reference(self, observation):
+        """Re-solve IK from the current body pose once per MPPI update."""
+        current_qpos = np.asarray(observation[:self.model.nq], dtype=float)
+        ik_reference = self._solve_arm_ik(
+            self.ee_goal_pos[self.goal_index],
+            current_qpos,
+            damping=self.arm_ik_damping,
+            step_size=self.arm_ik_step_size,
+            max_iterations=self.arm_ik_max_iterations,
+            tolerance=self.arm_ik_tolerance,
+            strict=False,
+        )
+        smoothed = self.arm_reference + self.arm_ik_smoothing * (
+            ik_reference - self.arm_reference
+        )
+        delta = np.clip(
+            smoothed - self.arm_reference,
+            -self.arm_ik_max_step,
+            self.arm_ik_max_step,
+        )
+        self.arm_reference = self.arm_reference + delta
+
+    def _joint_reference(self):
+        indices = self.gait_scheduler.indices[:self.horizon]
+        gait = self.gait_scheduler.gait[:, indices]
+        arm_q = np.repeat(self.arm_reference[:, None], self.horizon, axis=1)
+        arm_dq = np.zeros_like(arm_q)
+        return np.vstack((gait[:12], arm_q, gait[16:28], arm_dq))
+
     def next_goal(self):
-        """
-        Progress to the next goal based on the task sequence.
-        Updates the internal reference trajectory and gait scheduler.
-        """
         self.timer.increment()
-
-        if self.goal_index < len(self.goal_pos) - 1 and self.timer.done:
-            # Move to the next goal
+        if self.goal_index < len(self.ee_goal_pos) - 1 and self.timer.done:
             self.goal_index += 1
-            self.body_ref[:3] = self.goal_pos[self.goal_index]
-            self.body_ref[7:9] = self.cmd_vel[self.goal_index]
-            self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
-            self.timer.reset()
-            self.timer.end_time = self.waiting_times[self.goal_index]
-            print(f"Moved to next goal {self.goal_index}: {self.goal_pos[self.goal_index]}")
-            print(f"Gait: {self.desired_gait[self.goal_index]}")
-            self.timer.waiting = False
-
-        elif self.goal_index == len(self.goal_pos) - 1 and not self.task_success and self.timer.done:
-            # Final goal reached
+            self.arm_reference = self._solve_arm_ik(
+                self.ee_goal_pos[self.goal_index],
+                self.ik_data.qpos.copy(),
+                damping=self.arm_ik_damping,
+                step_size=self.arm_ik_step_size,
+                max_iterations=self.arm_ik_max_iterations,
+                tolerance=self.arm_ik_tolerance,
+                strict=False,
+            )
+            self.timer = Timer(end_time=self.waiting_times[self.goal_index])
+            print(f"Moved to next EE goal {self.goal_index}: {self.ee_goal_pos[self.goal_index]}")
+        elif self.goal_index == len(self.ee_goal_pos) - 1 and not self.task_success and self.timer.done:
             print("Task succeeded.")
             self.task_success = True
-
         else:
             self.timer.waiting = True
 
         if not self.task_success:
-            self.set_noise_for_gait(self.desired_gait[self.goal_index])
-        
+            self.set_noise_for_gait(self.default_gait)
+
+    def _ee_pose(self, observation):
+        observation = np.asarray(observation, dtype=float)
+        self.ee_data.qpos[:] = observation[:self.model.nq]
+        self.ee_data.qvel[:] = observation[self.model.nq:]
+        mujoco.mj_forward(self.model, self.ee_data)
+        quat = np.empty(4, dtype=float)
+        mujoco.mju_mat2Quat(quat, self.ee_data.site_xmat[self.ee_site_id])
+        return self.ee_data.site_xpos[self.ee_site_id].copy(), quat
+
+    def goal_reached(self, observation):
+        position, quat = self._ee_pose(observation)
+        target_pos = self.ee_goal_pos[self.goal_index]
+        target_quat = self.ee_goal_quat[self.goal_index]
+        return (
+            np.linalg.norm(position - target_pos) <= self.ee_pos_thresh
+            and 1.0 - abs(float(np.dot(quat, target_quat))) <= self.ee_ori_thresh
+        )
+
     def update(self, obs):
-        """
-        Update the MPPI controller based on the current observation.
-
-        Args:
-            obs (np.ndarray): Current state observation.
-        Returns:
-            np.ndarray: Selected action based on the optimal trajectory.
-        """
-         # Generate perturbed actions for rollouts
         actions = self.perturb_action()
-        self.obs = obs
-
-        # Calculate the direction and distance to the goal
-        horizontal_direction = self.body_ref[:2] - obs[:2]
-        goal_delta = np.linalg.norm(horizontal_direction)
-
-        # Update desired orientation based on the goal position
-        if goal_delta > 0.1 and not self.timer.waiting:
-            current_horizontal = np.array([obs[0], obs[1], 0.0])
-            target_horizontal = np.array(
-                [self.body_ref[0], self.body_ref[1], 0.0]
-            )
-            self.goal_ori = calculate_orientation_quaternion(
-                current_horizontal, target_horizontal
-            )
-        else:
-            self.goal_ori = np.array([1, 0, 0, 0])
-
-        self.body_ref[3:7] = self.goal_ori
-
-        # Perform rollouts using threaded rollout function
-        rollout_states = self.rollout_func(obs, actions)
-
-        # Update joint references from the gait scheduler
-        if self.internal_ref:
-            self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
-
-        # Calculate costs for each sampled trajectory
-        costs_sum = self.cost_func(rollout_states, actions, self.joints_ref, self.body_ref)
-
-        # Update the gait scheduler
+        self.obs = np.asarray(obs, dtype=float)
+        self._update_arm_reference(self.obs)
+        rollout_states = self.rollout_func(self.obs, actions)
+        self.joints_ref = self._joint_reference()
+        costs_sum = self.cost_func(
+            rollout_states, actions, self.joints_ref, self.body_ref
+        )
         self.gait_scheduler.roll()
 
-        # Calculate MPPI weights for the samples
-        min_cost = np.min(costs_sum)
-        max_cost = np.max(costs_sum)
-        self.exp_weights = np.exp(-1 / self.temperature * ((costs_sum - min_cost) / (max_cost - min_cost)))
-
-        # Weighted average of action deltas
-        weighted_delta_u = self.exp_weights.reshape(self.n_samples, 1, 1) * actions
-        weighted_delta_u = np.sum(weighted_delta_u, axis=0) / (np.sum(self.exp_weights) + 1e-10)
-        updated_actions = np.clip(weighted_delta_u, self.act_min, self.act_max)
-
-        # Update the trajectory with the optimal action
+        cost_range = np.max(costs_sum) - np.min(costs_sum)
+        if cost_range < 1e-12:
+            self.exp_weights = np.ones(self.n_samples)
+        else:
+            self.exp_weights = np.exp(
+                -((costs_sum - np.min(costs_sum)) / cost_range) / self.temperature
+            )
+        updated_actions = np.sum(
+            self.exp_weights[:, None, None] * actions, axis=0
+        ) / (np.sum(self.exp_weights) + 1e-10)
+        updated_actions = np.clip(updated_actions, self.act_min, self.act_max)
         self.selected_trajectory = updated_actions
         self.trajectory = np.roll(updated_actions, shift=-1, axis=0)
         self.trajectory[-1] = updated_actions[-1]
-
-        # Return the first action in the trajectory as the output action
         return updated_actions[0]
-    
+
     def quaternion_distance_np(self, q1, q2):
-        """
-        Compute the distance between two sets of quaternions.
-
-        Args:
-            q1 (np.ndarray): Array of quaternions (N x 4).
-            q2 (np.ndarray): Array of quaternions (N x 4).
-
-        Returns:
-            np.ndarray: Array of distances between the quaternions.
-        """
-        # Compute dot product between corresponding quaternions
-        dot_products = np.einsum('ij,ij->i', q1, q2)
-        # Compute distance as 1 - absolute dot product
-        return 1 - np.abs(dot_products)
-
+        return 1.0 - np.abs(np.einsum("ij,ij->i", q1, q2))
 
     def quadruped_cost_np(self, x, u, x_ref):
-        """
-        Compute the cost for quadruped motion based on state and action errors.
-
-        Args:
-            x (np.ndarray): Current states (N x state_dim).
-            u (np.ndarray): Current actions (N x action_dim).
-            x_ref (np.ndarray): Reference states (N x state_dim).
-
-        Returns:
-            np.ndarray: Computed cost for each sample.
-        """
-        # Match the PD law encoded by each MuJoCo actuator.  For the B2-Z1
-        # model, biasprm[2] stores the negative damping coefficient:
-        # torque = gainprm[0] * (ctrl - q) - kd * qvel.
         kp = np.asarray(self.model.actuator_gainprm[:, 0], dtype=float)
         kd = -np.asarray(self.model.actuator_biasprm[:, 2], dtype=float)
-
-        # Compute state error relative to the reference
         x_error = x - x_ref
-
-        # Compute quaternion distance for orientation error
         q_dist = self.quaternion_distance_np(x[:, 3:7], x_ref[:, 3:7])
-        x_error[:, 3] = q_dist
-        x_error[:, 4] = q_dist
-        x_error[:, 5] = q_dist
-        x_error[:, 6] = q_dist
-
-        # Compute joint and velocity errors
+        x_error[:, 3:7] = q_dist[:, None]
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
-        uv = x_ref[:, 29:45]
-        u_error = kp * (u - x_joint) - kd * (v_joint - uv)
-
-        # Compute positional cost (L1 norm for positional error)
-        x_error[:, :3] = 0  # Ignore positional error for simplicity
+        v_ref = x_ref[:, 29:45]
+        u_error = kp * (u - x_joint) - kd * (v_joint - v_ref)
+        x_error[:, :3] = 0.0
         x_pos_error = x[:, :3] - x_ref[:, :3]
-        L1_norm_pos_cost = np.abs(np.dot(x_pos_error, self.Q[:3, :3])).sum(axis=1)
-
-        # Compute total cost
-        cost = (
-            np.einsum('ij,ik,jk->i', x_error, x_error, self.Q) +
-            np.einsum('ij,ik,jk->i', u_error, u_error, self.R) +
-            L1_norm_pos_cost
+        position_cost = np.abs(np.dot(x_pos_error, self.Q[:3, :3])).sum(axis=1)
+        return (
+            np.einsum("ij,ik,jk->i", x_error, x_error, self.Q)
+            + np.einsum("ij,ik,jk->i", u_error, u_error, self.R)
+            + position_cost
         )
-        return cost
-
 
     def calculate_total_cost(self, states, actions, joints_ref, body_ref):
-        """
-        Calculate the total cost for all rollouts.
-
-        Args:
-            states (np.ndarray): Rollout states (samples x time steps x state_dim).
-            actions (np.ndarray): Rollout actions (samples x time steps x action_dim).
-            joints_ref (np.ndarray): Reference joint positions (time steps x joint_dim).
-            body_ref (np.ndarray): Reference body state (state_dim).
-
-        Returns:
-            np.ndarray: Total cost for each sample.
-        """
-        num_samples = states.shape[0]
-        num_pairs = states.shape[1]
-
-        # Repeat the base pose and construct the full B2-Z1 base-velocity
-        # reference. The task stores commanded x/y velocity in body_ref[7:9].
-        traj_body_ref = np.repeat(
-            body_ref[np.newaxis, :], num_samples * num_pairs, axis=0
+        num_samples, horizon = states.shape[:2]
+        flat_states = states.reshape(-1, states.shape[-1])
+        flat_actions = actions.reshape(-1, actions.shape[-1])
+        body_refs = np.repeat(body_ref[None, :], len(flat_states), axis=0)
+        tiled_joints = np.tile(joints_ref.T, (num_samples, 1, 1)).reshape(
+            -1, joints_ref.shape[0]
         )
-
-        # Flatten states and actions for batch processing
-        states = states.reshape(-1, states.shape[2])
-        actions = actions.reshape(-1, actions.shape[2])
-
-        # Repeat and reshape the 32-row [q, dq] joint reference.
-        joints_ref = np.tile(joints_ref.T, (num_samples, 1, 1))
-        joints_ref = joints_ref.reshape(-1, joints_ref.shape[2])
-        base_velocity_ref = np.zeros((len(joints_ref), 6))
-        base_velocity_ref[:, :2] = traj_body_ref[:, 7:9]
-
-        # B2-Z1 state order: base qpos, 16 joint q, base dq, 16 joint dq.
+        base_velocity_ref = np.zeros((len(flat_states), 6), dtype=float)
+        base_velocity_ref[:, :2] = body_refs[:, 7:9]
         x_ref = np.concatenate(
-            [traj_body_ref[:, :7], joints_ref[:, :16], base_velocity_ref, joints_ref[:, 16:],],
-            axis=1,
+            [body_refs[:, :7], tiled_joints[:, :16], base_velocity_ref,
+             tiled_joints[:, 16:]], axis=1
         )
-
-        # Rotate velocity vectors to the local frame
-        rotated_ref = batch_world_to_local_velocity(states[:, 3:7], states[:, 23:26])
-        states[:, 23:26] = rotated_ref
-
-        # Compute cost for each rollout
-        costs = self.quadruped_cost_np(states, actions, x_ref)
-
-        # Sum costs across time steps for each sample
-        total_costs = costs.reshape(num_samples, num_pairs).sum(axis=1)
-        return total_costs
+        flat_states[:, 23:26] = batch_world_to_local_velocity(
+            flat_states[:, 3:7], flat_states[:, 23:26]
+        )
+        costs = self.quadruped_cost_np(flat_states, flat_actions, x_ref)
+        return costs.reshape(num_samples, horizon).sum(axis=1)
 
     def eval_best_trajectory(self):
-        """
-        Evaluate the cost of the best trajectory selected by MPPI.
-
-        Returns:
-            float: Cost of the best trajectory, or None if no observation is available.
-        """
         if self.obs is None:
-            # If no observation is available, return None
             return None
-
         best_actions = self.selected_trajectory[None, :, :]
-
-        best_rollouts = self.rollout_func(self.obs, best_actions,)
-
+        best_rollouts = self.rollout_func(self.obs, best_actions)
         return self.cost_func(
-            best_rollouts,
-            best_actions,
-            self.joints_ref,
-            self.body_ref,
+            best_rollouts, best_actions, self.joints_ref, self.body_ref
         )[0]
 
     def __del__(self):
         if hasattr(self, "_closed") and hasattr(self, "executor"):
             self.close()
-    
+
+
 if __name__ == "__main__":
-    mppi = MPPI()
+    MPPI()

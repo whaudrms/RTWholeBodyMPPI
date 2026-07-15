@@ -145,8 +145,15 @@ class Simulator:
 
             mujoco.mj_step(self.model, self.data)
             
-            error = np.linalg.norm(np.array(self.agent.body_ref[:3]) - np.array(self.data.qpos[:3]))
-            if error < self.agent.goal_thresh[self.agent.goal_index]:
+            observation = np.concatenate([self.data.qpos, self.data.qvel], axis=0)
+            if hasattr(self.agent, "goal_reached"):
+                reached = self.agent.goal_reached(observation)
+            else:
+                error = np.linalg.norm(
+                    np.asarray(self.agent.body_ref[:3]) - np.asarray(self.data.qpos[:3])
+                )
+                reached = error < self.agent.goal_thresh[self.agent.goal_index]
+            if reached:
                 self.agent.next_goal()
 
             if self.viewer is not None and self.viewer.is_alive:
@@ -157,6 +164,16 @@ class Simulator:
                     type=mujoco.mjtGeom.mjGEOM_SPHERE, # Specify that this is a sphere
                     label=""
                 )
+
+                # Show the current manipulator end-effector goal for locomani.
+                if hasattr(self.agent, "ee_goal_pos"):
+                    ee_goal = self.agent.ee_goal_pos[self.agent.goal_index]
+                    self.viewer.add_marker(
+                        pos=ee_goal,
+                        size=[0.05, 0.05, 0.05],
+                        rgba=[1, 0.2, 0.1, 1],
+                        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                    )
                             
                 self.viewer.render()
                 if self.save_frames:

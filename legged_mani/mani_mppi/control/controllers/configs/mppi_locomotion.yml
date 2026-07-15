@@ -47,8 +47,8 @@ rollout_cone: "pyramidal"
 # ============================
 # Spline Parameters
 # ============================
-sample_type: "cubic" # Spline interpolation type ("cubic" for cubic splines).
-n_knots: 4          # Number of control points (knots) in the spline.
+sample_type: "cubic" # Spline interpolation type ("cubic" for cubic splines). Normal for nominal mppi.
+n_knots: 4           # Number of control points (knots) in the spline.
 
 # ============================
 # Noise Parameters

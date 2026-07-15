@@ -1,0 +1,136 @@
+# MPPI configuration for EE-pose locomani tasks.
+dt: 0.01
+n_samples: 30
+lambda: 0.1
+horizon: 40
+n_workers: 5
+seed: 42
+
+# The body is stabilized internally; it is not a task goal.
+keyframe: "sit"
+body_reference_keyframe: "stand"
+default_gait: "in_place"
+arm_ik_damping: 0.05
+arm_ik_step_size: 0.7
+arm_ik_max_iterations: 100
+arm_ik_tolerance: 0.0001
+arm_ik_smoothing: 0.3
+arm_ik_max_step: 0.04
+sampling_init:
+  - 0.0
+  - 1.28
+  - -2.8
+  - 0.0
+  - 1.28
+  - -2.8
+  - 0.0
+  - 1.28
+  - -2.8
+  - 0.0
+  - 1.28
+  - -2.8
+  - 0.0
+  - 1.0
+  - -0.6
+  - 0.0
+
+o_solref: [0.02, 1.0]
+rollout_cone: "pyramidal"
+sample_type: "cubic"
+n_knots: 4
+
+# Arm exploration must be nonzero for MPPI to discover EE motion.
+noise_sigma:
+  - 0.06
+  - 0.1
+  - 0.1
+  - 0.06
+  - 0.1
+  - 0.1
+  - 0.06
+  - 0.1
+  - 0.1
+  - 0.06
+  - 0.1
+  - 0.1
+  - 0.04
+  - 0.06
+  - 0.06
+  - 0.04
+
+gait_noise_scale:
+  in_place: 1.0
+  walk: 1.0
+  walk_fast: 1.0
+  trot: 1.2
+
+ee_position_weight: 5000.0
+ee_orientation_weight: 200.0
+ee_position_threshold: 0.03
+ee_orientation_threshold: 0.1
+
+# State order: base qpos, 16 joint qpos, base qvel, 16 joint qvel.
+Q_diag:
+  - 3000.0
+  - 3000.0
+  - 2000.0
+  - 300000.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 600.0
+  - 5000.0
+  - 5000.0
+  - 5000.0
+  - 5000.0
+  - 1.0
+  - 0.0001
+  - 0.0001
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+  - 0.5
+
+R_diag:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001

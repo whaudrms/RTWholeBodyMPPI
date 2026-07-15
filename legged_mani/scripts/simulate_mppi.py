@@ -7,7 +7,6 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mani_mppi.interface.simulator import Simulator
-import mani_mppi.control.controllers.mppi_locomotion
 from mani_mppi.utils.tasks import get_task
 
 import argparse
@@ -32,7 +31,11 @@ def main(task):
     sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
-    agent = mani_mppi.control.controllers.mppi_locomotion.MPPI(task=task)
+    if task == "locomani":
+        from mani_mppi.control.controllers.mppi_locomani import MPPI
+    else:
+        from mani_mppi.control.controllers.mppi_locomotion import MPPI
+    agent = MPPI(task=task)
     # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
     simulator = Simulator(agent=agent, viewer=VIEWER, T=T, dt=SIMULATION_STEP, timeconst=TIMECONST,
                           dampingratio=DAMPINGRATIO, model_path=sim_path, ctrl_rate=CTRL_UPDATE_RATE)
@@ -43,7 +46,7 @@ def main(task):
 
 if __name__ == "__main__":
     # Define valid tasks
-    VALID_TASKS = ['stand', 'walk_straight']
+    VALID_TASKS = ['stand', 'walk_straight', 'locomani']
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run simulation with a specified task.")
