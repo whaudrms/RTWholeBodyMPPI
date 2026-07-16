@@ -11,26 +11,25 @@ horizon: 40       # Prediction horizon (number of time steps).
 n_workers: 5      # Number of parallel workers for optimization.
 seed: 42          # Random seed for reproducibility.
 
-# Match the original Go1 planner/simulator startup: initialize around the
-# seated control while tracking the standing body pose and in-place gait.
-keyframe: "sit"
+# Start the simulator and MPPI nominal trajectory from the same standing pose.
+keyframe: "stand"
 body_reference_keyframe: "stand"
 
-# Initialize the nominal control at the actual B2-Z1 sit keyframe.  This keeps
+# Initialize the nominal control at the actual B2-Z1 stand keyframe.  This keeps
 # the first MPPI rollout consistent with the simulator state.
 sampling_init:
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
   - 1.0
   - -0.6
@@ -86,11 +85,11 @@ gait_noise_scale:
 Q_diag:
   - 3000.0    # Base x position
   - 3000.0    # Base y position
-  - 2000.0    # Base z position
-  - 300000.0 # Base quaternion distance
-  - 0     # Quaternion component
-  - 0     # Quaternion component
-  - 0     # Quaternion component
+  - 4000.0    # Base z position
+  - 0.0       # Unused quaternion scalar slot
+  - 10000.0   # Base roll error (rotation-vector x)
+  - 10000.0   # Base pitch error (rotation-vector y)
+  - 2000.0    # Base yaw error (rotation-vector z)
   - 1200.0   # FR hip position
   - 1200.0   # FR thigh position
   - 1200.0   # FR calf position

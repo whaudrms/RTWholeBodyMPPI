@@ -99,10 +99,28 @@ python3 -m legged_mani.tests.test_environment
 python3 -m legged_mani.tests.test_mppi
 python3 -m legged_mani.tests.test_locomotion
 python3 -m legged_mani.scripts.view_model
+python3 -m legged_mani.scripts.visualize_gait_trajectory
 python3 -m legged_mani.scripts.simulate_mppi --list-tasks
 python3 -m legged_mani.scripts.simulate_mppi --task sit_hold
 python3 -m legged_mani.scripts.simulate_mppi --task stand_hold
 python3 -m legged_mani.scripts.simulate_mppi --task in_place
+```
+
+To validate a 32-row gait reference without controller or contact-dynamics
+effects, replay its joint angles with the floating base fixed at the `stand`
+keyframe. The viewer draws the complete foot-site paths in four colors and a
+z=0 reference grid. Press Space to pause, use Left/Right to step through gait
+samples, and press R to return to the first sample.
+
+```bash
+python3 -m legged_mani.scripts.visualize_gait_trajectory \
+  --model legged_mani/mani_mppi/models/b2_z1_4dof.xml \
+  --gait legged_mani/mani_mppi/control/gait_scheduler/gaits/FAST/b2_z1/walking_gait_raibert_FAST_0_0_10cm_80hz.tsv \
+  --rate 80
+
+# Numerical validation only, with optional exported xyz foot trajectories.
+python3 -m legged_mani.scripts.visualize_gait_trajectory \
+  --headless --save-trajectory /tmp/b2_foot_trajectory.tsv
 ```
 
 `simulate_mppi` runs MuJoCo at 100 Hz. Hold tasks update MPPI every five

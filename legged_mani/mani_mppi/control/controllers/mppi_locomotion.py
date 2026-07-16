@@ -78,6 +78,7 @@ class MPPI(BaseMPPI):
 
         # Set initial parameters and state
         self.obs = None
+        self.cached_best_cost = None
         self.internal_ref = True
         self.exp_weights = np.ones(self.n_samples) / self.n_samples  # Initial MPPI weights
         self.waiting_times = waiting_times
@@ -184,6 +185,10 @@ class MPPI(BaseMPPI):
 
         # Calculate MPPI weights for the samples
         min_cost = np.min(costs_sum)
+        # Reuse the cost already computed by the main MPPI rollout for
+        # trajectory logging. This avoids running an additional rollout from
+        # Simulator.store_trajectory() on every simulation step.
+        self.cached_best_cost = float(min_cost)
         max_cost = np.max(costs_sum)
         self.exp_weights = np.exp(-1 / self.temperature * ((costs_sum - min_cost) / (max_cost - min_cost)))
 
@@ -200,21 +205,40 @@ class MPPI(BaseMPPI):
         # Return the first action in the trajectory as the output action
         return updated_actions[0]
     
-    def quaternion_distance_np(self, q1, q2):
-        """
-        Compute the distance between two sets of quaternions.
+    def quaternion_rotation_error_np(self, q, q_ref):
+        """Return the shortest relative rotation vector for [w, x, y, z]."""
+        eps = 1e-12
+        q = q / np.maximum(np.linalg.norm(q, axis=1, keepdims=True), eps)
+        q_ref = q_ref / np.maximum(
+            np.linalg.norm(q_ref, axis=1, keepdims=True), eps
+        )
 
-        Args:
-            q1 (np.ndarray): Array of quaternions (N x 4).
-            q2 (np.ndarray): Array of quaternions (N x 4).
+        # Relative orientation q_error = conjugate(q_ref) * q.
+        rw, rx, ry, rz = q_ref.T
+        w, x, y, z = q.T
+        q_error = np.column_stack(
+            (
+                rw * w + rx * x + ry * y + rz * z,
+                rw * x - rx * w - ry * z + rz * y,
+                rw * y + rx * z - ry * w - rz * x,
+                rw * z - rx * y + ry * x - rz * w,
+            )
+        )
 
-        Returns:
-            np.ndarray: Array of distances between the quaternions.
-        """
-        # Compute dot product between corresponding quaternions
-        dot_products = np.einsum('ij,ij->i', q1, q2)
-        # Compute distance as 1 - absolute dot product
-        return 1 - np.abs(dot_products)
+        # q and -q represent the same orientation. Select the branch whose
+        # rotation angle is in [0, pi].
+        q_error[q_error[:, 0] < 0.0] *= -1.0
+        scalar = np.clip(q_error[:, 0], -1.0, 1.0)
+        vector = q_error[:, 1:]
+        vector_norm = np.linalg.norm(vector, axis=1)
+        angle = 2.0 * np.arctan2(vector_norm, scalar)
+        scale = np.divide(
+            angle,
+            vector_norm,
+            out=np.full_like(angle, 2.0),
+            where=vector_norm > eps,
+        )
+        return vector * scale[:, None]
 
 
     def quadruped_cost_np(self, x, u, x_ref):
@@ -238,12 +262,13 @@ class MPPI(BaseMPPI):
         # Compute state error relative to the reference
         x_error = x - x_ref
 
-        # Compute quaternion distance for orientation error
-        q_dist = self.quaternion_distance_np(x[:, 3:7], x_ref[:, 3:7])
-        x_error[:, 3] = q_dist
-        x_error[:, 4] = q_dist
-        x_error[:, 5] = q_dist
-        x_error[:, 6] = q_dist
+        # Store the relative rotation vector in the quaternion slots so that
+        # Q_diag[4:7] independently weights roll, pitch, and yaw errors.
+        rotation_error = self.quaternion_rotation_error_np(
+            x[:, 3:7], x_ref[:, 3:7]
+        )
+        x_error[:, 3] = 0.0
+        x_error[:, 4:7] = rotation_error
 
         # Compute joint and velocity errors
         x_joint = x[:, 7:23]
@@ -316,25 +341,13 @@ class MPPI(BaseMPPI):
 
     def eval_best_trajectory(self):
         """
-        Evaluate the cost of the best trajectory selected by MPPI.
+        Return the cached cost of the best sample from the latest MPPI update.
 
         Returns:
-            float: Cost of the best trajectory, or None if no observation is available.
+            float: Latest best sampled-trajectory cost, or None before the
+                first controller update.
         """
-        if self.obs is None:
-            # If no observation is available, return None
-            return None
-
-        best_actions = self.selected_trajectory[None, :, :]
-
-        best_rollouts = self.rollout_func(self.obs, best_actions,)
-
-        return self.cost_func(
-            best_rollouts,
-            best_actions,
-            self.joints_ref,
-            self.body_ref,
-        )[0]
+        return self.cached_best_cost
 
     def __del__(self):
         if hasattr(self, "_closed") and hasattr(self, "executor"):

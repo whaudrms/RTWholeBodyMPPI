@@ -1,62 +1,86 @@
-# MPPI configuration for EE-pose locomani tasks.
-dt: 0.01
-n_samples: 30
-lambda: 0.1
-horizon: 40
-n_workers: 5
-seed: 42
+# ============================
+# MPPI Configuration File
+# ============================
 
-# The body is stabilized internally; it is not a task goal.
-keyframe: "sit"
+# MPPI Parameters
+# These control the behavior of the Model Predictive Path Integral optimization.
+dt: 0.01          # Time step size for simulation (in seconds).
+n_samples: 30     # Number of trajectory samples per iteration.
+lambda: 0.1       # Temperature parameter for trajectory cost weighting.
+horizon: 40       # Prediction horizon (number of time steps).
+n_workers: 5      # Number of parallel workers for optimization.
+seed: 42          # Random seed for reproducibility.
+
+# Start the simulator and MPPI nominal trajectory from the same standing pose.
+keyframe: "stand"
 body_reference_keyframe: "stand"
+# Keep walking while the arm follows its EE waypoint sequence.
 default_gait: "in_place"
+
+# Arm IK parameters used to generate the nominal arm-joint reference.
 arm_ik_damping: 0.05
 arm_ik_step_size: 0.7
 arm_ik_max_iterations: 100
 arm_ik_tolerance: 0.0001
 arm_ik_smoothing: 0.3
 arm_ik_max_step: 0.04
+
+# Initialize the nominal control at the actual B2-Z1 stand keyframe.  This keeps
+# the first MPPI rollout consistent with the simulator state.
 sampling_init:
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
-  - 1.28
-  - -2.8
+  - 0.7
+  - -1.5
   - 0.0
   - 1.0
   - -0.6
   - 0.0
 
-o_solref: [0.02, 1.0]
+# ============================
+# Model Parameters for Contact Dynamics
+# ============================
+o_solref:
+  - 0.02           # Time constant for contact model (stiffness control).
+  - 1.0            # Damping ratio for the contact model.
 rollout_cone: "pyramidal"
-sample_type: "cubic"
-n_knots: 4
 
-# Arm exploration must be nonzero for MPPI to discover EE motion.
+# ============================
+# Spline Parameters
+# ============================
+sample_type: "cubic" # Spline interpolation type ("cubic" for cubic splines). Normal for nominal mppi.
+n_knots: 4           # Number of control points (knots) in the spline.
+
+# ============================
+# Noise Parameters
+# ============================
+# Noise standard deviations applied to control inputs for exploration.
 noise_sigma:
-  - 0.06
-  - 0.1
-  - 0.1
-  - 0.06
-  - 0.1
-  - 0.1
-  - 0.06
-  - 0.1
-  - 0.1
-  - 0.06
-  - 0.1
-  - 0.1
-  - 0.04
-  - 0.06
-  - 0.06
-  - 0.04
+  - 0.03 # Hip joint (FR)
+  - 0.1  # Thigh joint (FR)
+  - 0.1  # Calf joint (FR)
+  - 0.03 # Hip joint (FL)
+  - 0.1  # Thigh joint (FL)
+  - 0.1  # Calf joint (FL)
+  - 0.03 # Hip joint (RR)
+  - 0.1  # Thigh joint (RR)
+  - 0.1  # Calf joint (RR)
+  - 0.03 # Hip joint (RL)
+  - 0.1  # Thigh joint (RL)
+  - 0.1  # Calf joint (RL)
+  # Nonzero arm exploration is required for MPPI to discover EE motion.
+  - 0.06 # Z1 joint1
+  - 0.06 # Z1 joint2
+  - 0.06 # Z1 joint3
+  - 0.06 # Z1 joint4
 
 gait_noise_scale:
   in_place: 1.0
@@ -64,59 +88,64 @@ gait_noise_scale:
   walk_fast: 1.0
   trot: 1.2
 
-ee_position_weight: 5000.0
-ee_orientation_weight: 200.0
-ee_position_threshold: 0.03
-ee_orientation_threshold: 0.1
-
-# State order: base qpos, 16 joint qpos, base qvel, 16 joint qvel.
+# ============================
+# Cost Function Parameters
+# ============================
+# Diagonal entries of the state cost matrix Q.
+# Task targets and EE task weights are defined only in utils/tasks.py.
+# Higher values penalize deviations from reference states more heavily.
 Q_diag:
-  - 3000.0
-  - 3000.0
-  - 2000.0
-  - 300000.0
-  - 0.0
-  - 0.0
-  - 0.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 600.0
-  - 5000.0
-  - 5000.0
-  - 5000.0
-  - 5000.0
-  - 1.0
-  - 0.0001
-  - 0.0001
-  - 0.01
-  - 0.01
-  - 0.01
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
-  - 0.5
+  # Torso task error: [x, y, z, roll, pitch, yaw, unused].
+  - 300    # x-position
+  - 300    # y-position
+  - 500   # z-position (height)
+  - 50000.0  # Base roll
+  - 50000.0  # Base pitch
+  - 0.0       # Base yaw: no cost
+  - 0.0       # Unused torso orientation slot
+  - 8000    # Hip joint (FR)
+  - 8000    # Thigh joint (FR)
+  - 8000    # Calf joint (FR)
+  - 8000    # Hip joint (FL)
+  - 8000    # Thigh joint (FL)
+  - 8000    # Calf joint (FL)
+  - 8000    # Hip joint (RR)
+  - 8000    # Thigh joint (RR)
+  - 8000    # Calf joint (RR)
+  - 8000    # Hip joint (RL)
+  - 8000    # Thigh joint (RL)
+  - 8000    # Calf joint (RL)
+  - 700.0   # Z1 joint1 position
+  - 700.0   # Z1 joint2 position
+  - 700.0   # Z1 joint3 position
+  - 700.0   # Z1 joint4 position
+  - 1.0      # Base linear velocity x
+  - 1.0     # Base linear velocity y
+  - 50.0    # Base linear velocity z
+  - 200.0   # Base angular velocity x
+  - 200.0   # Base angular velocity y
+  - 10.0    # Base angular velocity z
+  - 0.5     # FR hip velocity
+  - 0.5     # FR thigh velocity
+  - 0.5     # FR calf velocity
+  - 0.5     # FL hip velocity
+  - 0.5     # FL thigh velocity
+  - 0.5     # FL calf velocity
+  - 0.5     # RR hip velocity
+  - 0.5     # RR thigh velocity
+  - 0.5     # RR calf velocity
+  - 0.5     # RL hip velocity
+  - 0.5     # RL thigh velocity
+  - 0.5     # RL calf velocity
+  - 0.5     # Z1 joint1 velocity
+  - 0.5     # Z1 joint2 velocity
+  - 0.5     # Z1 joint3 velocity
+  - 0.5     # Z1 joint4 velocity
 
+# ============================
+# Control Cost Matrix R
+# ============================
+# Penalizes excessive control effort (torque commands).
 R_diag:
   - 0.001
   - 0.001

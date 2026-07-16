@@ -7,6 +7,28 @@ from scipy.spatial.transform import Rotation as R
 import tqdm
 from PIL import Image
 
+
+def synchronize_contact_options(target_model, source_model):
+    """Match simulator contact options to the controller rollout model.
+
+    The simulator and MPPI load separate MuJoCo models.  Contact cone and
+    override settings therefore need to be copied explicitly; otherwise MPPI
+    predicts pyramidal/overridden contacts while the simulator executes the
+    XML defaults (elliptic contacts without the override).
+    """
+    target_model.opt.cone = source_model.opt.cone
+
+    override_bit = int(mujoco.mjtEnableBit.mjENBL_OVERRIDE)
+    target_model.opt.enableflags = (
+        (int(target_model.opt.enableflags) & ~override_bit)
+        | (int(source_model.opt.enableflags) & override_bit)
+    )
+    target_model.opt.o_solref[:] = source_model.opt.o_solref
+    target_model.opt.o_solimp[:] = source_model.opt.o_solimp
+    target_model.opt.o_friction[:] = source_model.opt.o_friction
+    target_model.opt.o_margin = source_model.opt.o_margin
+
+
 class Simulator:
     """
     A class representing a simulator for controlling and estimating the state of a system.
@@ -48,8 +70,15 @@ class Simulator:
         # model
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = dt
-        #self.model.opt.enableflags = 1 # to override contact settings
-        self.model.opt.o_solref = np.array([timeconst, dampingratio])
+        if agent is not None and hasattr(agent, "model"):
+            # MPPI and the closed-loop simulator use separate model instances.
+            # Keep their contact dynamics identical so rollout costs describe
+            # the contacts that will actually be executed by mj_step below.
+            synchronize_contact_options(self.model, agent.model)
+        else:
+            # Preserve the standalone Simulator API when no controller model
+            # is available as the source of truth.
+            self.model.opt.o_solref = np.array([timeconst, dampingratio])
         # data
         self.data = mujoco.MjData(self.model)
         self.T = T
