@@ -11,6 +11,12 @@ horizon: 40       # Prediction horizon (number of time steps).
 n_workers: 5      # Number of parallel workers for optimization.
 seed: 42          # Random seed for reproducibility.
 
+# Use the phase-aligned gait as the MPPI action prior.  The optimizer then
+# searches for stabilizing corrections instead of discovering the full gait
+# from the standing action trajectory.
+nominal_from_gait: true
+gait_startup_blend_steps: 50
+
 # Start the simulator and MPPI nominal trajectory from the same standing pose.
 keyframe: "stand"
 body_reference_keyframe: "stand"
@@ -83,13 +89,13 @@ gait_noise_scale:
 # Diagonal entries of the state cost matrix Q
 # Higher values penalize deviations from reference states more heavily.
 Q_diag:
-  - 3000.0    # Base x position
-  - 3000.0    # Base y position
-  - 4000.0    # Base z position
-  - 0.0       # Unused quaternion scalar slot
-  - 10000.0   # Base roll error (rotation-vector x)
-  - 10000.0   # Base pitch error (rotation-vector y)
-  - 2000.0    # Base yaw error (rotation-vector z)
+  - 500.0     # base x
+  - 500.0     # base y
+  - 500.0     # base z
+  - 0.0       # quaternion scalar
+  - 1000.0    # roll
+  - 1000.0    # pitch
+  - 100.0     # yaw
   - 1200.0   # FR hip position
   - 1200.0   # FR thigh position
   - 1200.0   # FR calf position
@@ -106,28 +112,28 @@ Q_diag:
   - 1200.0   # Z1 joint2 position
   - 1200.0   # Z1 joint3 position
   - 1200.0   # Z1 joint4 position
-  - 1        # Base linear velocity x
-  - 0.0001  # Base linear velocity y
-  - 0.0001  # Base linear velocity z
-  - 0.0001  # Base angular velocity x
-  - 0.0001  # Base angular velocity y
-  - 0.0001  # Base angular velocity z
-  - 0.5     # FR hip velocity
-  - 0.5     # FR thigh velocity
-  - 0.5     # FR calf velocity
-  - 0.5     # FL hip velocity
-  - 0.5     # FL thigh velocity
-  - 0.5     # FL calf velocity
-  - 0.5     # RR hip velocity
-  - 0.5     # RR thigh velocity
-  - 0.5     # RR calf velocity
-  - 0.5     # RL hip velocity
-  - 0.5     # RL thigh velocity
-  - 0.5     # RL calf velocity
-  - 0.5     # Z1 joint1 velocity
-  - 0.5     # Z1 joint2 velocity
-  - 0.5     # Z1 joint3 velocity
-  - 0.5     # Z1 joint4 velocity
+  - 0.1        # Base linear velocity x
+  - 0.1        # Base linear velocity y
+  - 0.1        # Base linear velocity z
+  - 0.1        # Base angular velocity x
+  - 0.1        # Base angular velocity y
+  - 0.1        # Base angular velocity z
+  - 0.0     # FR hip velocity
+  - 0.0     # FR thigh velocity
+  - 0.0     # FR calf velocity
+  - 0.0     # FL hip velocity
+  - 0.0     # FL thigh velocity
+  - 0.0     # FL calf velocity
+  - 0.0     # RR hip velocity
+  - 0.0     # RR thigh velocity
+  - 0.0     # RR calf velocity
+  - 0.0     # RL hip velocity
+  - 0.0     # RL thigh velocity
+  - 0.0     # RL calf velocity
+  - 0.0     # Z1 joint1 velocity
+  - 0.0     # Z1 joint2 velocity
+  - 0.0     # Z1 joint3 velocity
+  - 0.0     # Z1 joint4 velocity
 
 # ============================
 # Control Cost Matrix R

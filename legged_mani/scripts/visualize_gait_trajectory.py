@@ -28,7 +28,7 @@ DEFAULT_MODEL = PACKAGE_ROOT / "mani_mppi/models/b2_z1_4dof.xml"
 DEFAULT_GAIT = (
     PACKAGE_ROOT
     / "mani_mppi/control/gait_scheduler/gaits/"
-    "FAST/b2_z1/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv"
+    "FAST/b2_retargeted/walking_gait_raibert_FAST_0_0_10cm_100hz.tsv"
 )
 
 JOINT_NAMES = (

@@ -60,8 +60,8 @@ TASKS = {
         # time and switches after the current waypoint is reached.
         "ee_goal_pos": [
             [0.85, 0.00, 0.80],
-            [2.0, 0.00, 0.80],
-            [3.0, 0.15, 0.48],
+            [2.0, 0.15, 0.80],
+            [0.85, 0.15, 0.48],
             [0.85, 0.00, 0.48],
         ],
         # One [w, x, y, z] quaternion for each EE waypoint.
@@ -71,11 +71,8 @@ TASKS = {
             [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
         ],
-        "ee_position_weight": 5000.0,
-        "ee_orientation_weight": 0.0,
-        "ee_terminal_scale": 5.0,
         "ee_pos_thresh": 0.03,
-        "ee_ori_thresh": 0.1,
+        "ee_ori_thresh": 1.0, # no orientation tracking
         # Wait after reaching each waypoint before switching to the next one.
         "waiting_times": [20, 20, 20, 20],
 

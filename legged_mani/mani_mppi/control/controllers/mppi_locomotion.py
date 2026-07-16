@@ -17,16 +17,16 @@ GAIT_DIR = os.path.join(BASE_DIR, "../gait_scheduler/gaits/")
 # Paths for gait files
 ### must generate gait data ###
 GAIT_INPLACE_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_0_15cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_retargeted/walking_gait_raibert_FAST_0_0_15cm_100hz.tsv"
 )
 GAIT_TROT_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_5_15cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_retargeted/walking_gait_raibert_FAST_0_5_15cm_100hz.tsv"
 )
 GAIT_WALK_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_1_15cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_retargeted/walking_gait_raibert_FAST_0_1_15cm_100hz.tsv"
 )
 GAIT_WALK_FAST_PATH = os.path.join(
-    GAIT_DIR, "FAST/b2_z1/walking_gait_raibert_FAST_0_1_15cm_100hz.tsv"
+    GAIT_DIR, "FAST/b2_retargeted/walking_gait_raibert_FAST_0_1_15cm_100hz.tsv"
 )
 
 class MPPI(BaseMPPI):
@@ -75,6 +75,12 @@ class MPPI(BaseMPPI):
         self.Q = np.diag(np.array(params['Q_diag']))
         self.R = np.diag(np.array(params['R_diag']))
         self.cost_func = self.calculate_total_cost
+        self.nominal_from_gait = bool(params.get('nominal_from_gait', True))
+        self.gait_startup_blend_steps = int(
+            params.get('gait_startup_blend_steps', 50)
+        )
+        if self.gait_startup_blend_steps < 0:
+            raise ValueError("gait_startup_blend_steps must be non-negative")
 
         # Set initial parameters and state
         self.obs = None
@@ -103,6 +109,7 @@ class MPPI(BaseMPPI):
         
         self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
         self.set_noise_for_gait(self.desired_gait[self.goal_index])
+        self._reset_gait_nominal(self.trajectory)
         self.task_success = False
 
         # Debug information
@@ -118,10 +125,18 @@ class MPPI(BaseMPPI):
 
         if self.goal_index < len(self.goal_pos) - 1 and self.timer.done:
             # Move to the next goal
+            previous_gait = self.gait_scheduler
+            transition_source = self.trajectory.copy()
             self.goal_index += 1
             self.body_ref[:3] = self.goal_pos[self.goal_index]
             self.body_ref[7:9] = self.cmd_vel[self.goal_index]
             self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
+            if self.gait_scheduler is not previous_gait:
+                self.gait_scheduler.phase_time = 0
+                self.gait_scheduler.indices = np.arange(
+                    self.gait_scheduler.phase_length
+                )
+                self._reset_gait_nominal(transition_source)
             self.timer.reset()
             self.timer.end_time = self.waiting_times[self.goal_index]
             print(f"Moved to next goal {self.goal_index}: {self.goal_pos[self.goal_index]}")
@@ -138,6 +153,81 @@ class MPPI(BaseMPPI):
 
         if not self.task_success:
             self.set_noise_for_gait(self.desired_gait[self.goal_index])
+
+    def _gait_blend(self):
+        """Return one startup blend factor for each point in the horizon."""
+        if self.gait_startup_blend_steps == 0:
+            return np.ones(self.horizon)
+        horizon_steps = self._gait_nominal_step + np.arange(self.horizon)
+        return np.clip(
+            horizon_steps / self.gait_startup_blend_steps, 0.0, 1.0
+        )
+
+    def _build_gait_reference(self):
+        """Build the phase-aligned, startup-blended [q, dq] gait horizon."""
+        indices = self.gait_scheduler.indices[:self.horizon]
+        gait_reference = self.gait_scheduler.gait[:, indices].copy()
+        expected_rows = 2 * self.act_dim
+        if gait_reference.shape != (expected_rows, self.horizon):
+            raise ValueError(
+                "Gait reference must have shape "
+                f"({expected_rows}, {self.horizon}), got "
+                f"{gait_reference.shape}"
+            )
+
+        if not self.nominal_from_gait:
+            return gait_reference
+
+        blend = self._gait_blend()
+        gait_q = gait_reference[:self.act_dim].T
+        source_q = self._gait_blend_source
+        gait_reference[:self.act_dim] = (
+            source_q + blend[:, None] * (gait_q - source_q)
+        ).T
+        gait_reference[self.act_dim:] *= blend[None, :]
+        return gait_reference
+
+    def _reset_gait_nominal(self, blend_source=None):
+        """Reset the gait prior and its warm-started correction trajectory."""
+        self._gait_nominal_step = 0
+        self.gait_correction = np.zeros((self.horizon, self.act_dim))
+        if blend_source is None:
+            blend_source = np.repeat(
+                self.sampling_init[None, :], self.horizon, axis=0
+            )
+        blend_source = np.asarray(blend_source, dtype=float)
+        if blend_source.shape != (self.horizon, self.act_dim):
+            raise ValueError(
+                "gait blend source must have shape "
+                f"({self.horizon}, {self.act_dim}), got {blend_source.shape}"
+            )
+        self._gait_blend_source = blend_source.copy()
+
+        if self.nominal_from_gait:
+            self.joints_ref = self._build_gait_reference()
+            self.gait_nominal = self.joints_ref[:self.act_dim].T.copy()
+            self.trajectory = self.gait_nominal.copy()
+            self.selected_trajectory = self.trajectory.copy()
+
+    def _advance_gait_nominal(self, updated_actions, nominal_actions):
+        """Warm-start corrections while advancing the nominal gait phase."""
+        selected_correction = updated_actions - nominal_actions
+        self.gait_correction[:-1] = selected_correction[1:]
+        # The new horizon tail has no optimized predecessor.  Seed it with
+        # the future gait itself instead of repeating the last action.
+        self.gait_correction[-1] = 0.0
+
+        self.gait_scheduler.roll()
+        self._gait_nominal_step += 1
+        self._gait_blend_source[:-1] = self._gait_blend_source[1:]
+        self._gait_blend_source[-1] = self._gait_blend_source[-2]
+        next_reference = self._build_gait_reference()
+        self.gait_nominal = next_reference[:self.act_dim].T.copy()
+        self.trajectory = np.clip(
+            self.gait_nominal + self.gait_correction,
+            self.act_min,
+            self.act_max,
+        )
         
     def update(self, obs):
         """
@@ -148,7 +238,7 @@ class MPPI(BaseMPPI):
         Returns:
             np.ndarray: Selected action based on the optimal trajectory.
         """
-         # Generate perturbed actions for rollouts
+        # Generate perturbed actions around the phase-aligned gait nominal.
         actions = self.perturb_action()
         self.obs = obs
 
@@ -175,13 +265,11 @@ class MPPI(BaseMPPI):
 
         # Update joint references from the gait scheduler
         if self.internal_ref:
-            self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
+            self.joints_ref = self._build_gait_reference()
+        nominal_actions = self.joints_ref[:self.act_dim].T
 
         # Calculate costs for each sampled trajectory
         costs_sum = self.cost_func(rollout_states, actions, self.joints_ref, self.body_ref)
-
-        # Update the gait scheduler
-        self.gait_scheduler.roll()
 
         # Calculate MPPI weights for the samples
         min_cost = np.min(costs_sum)
@@ -190,7 +278,10 @@ class MPPI(BaseMPPI):
         # Simulator.store_trajectory() on every simulation step.
         self.cached_best_cost = float(min_cost)
         max_cost = np.max(costs_sum)
-        self.exp_weights = np.exp(-1 / self.temperature * ((costs_sum - min_cost) / (max_cost - min_cost)))
+        cost_range = max(max_cost - min_cost, np.finfo(float).eps)
+        self.exp_weights = np.exp(
+            -1 / self.temperature * ((costs_sum - min_cost) / cost_range)
+        )
 
         # Weighted average of action deltas
         weighted_delta_u = self.exp_weights.reshape(self.n_samples, 1, 1) * actions
@@ -199,8 +290,12 @@ class MPPI(BaseMPPI):
 
         # Update the trajectory with the optimal action
         self.selected_trajectory = updated_actions
-        self.trajectory = np.roll(updated_actions, shift=-1, axis=0)
-        self.trajectory[-1] = updated_actions[-1]
+        if self.nominal_from_gait:
+            self._advance_gait_nominal(updated_actions, nominal_actions)
+        else:
+            self.gait_scheduler.roll()
+            self.trajectory = np.roll(updated_actions, shift=-1, axis=0)
+            self.trajectory[-1] = updated_actions[-1]
 
         # Return the first action in the trajectory as the output action
         return updated_actions[0]

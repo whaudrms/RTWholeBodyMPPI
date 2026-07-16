@@ -313,6 +313,10 @@
     <framequat name="base_quat" objtype="xbody" objname="base_link"/>
     <gyro name="base_gyro" site="imu"/>
     <accelerometer name="base_acc" site="imu"/>
+    <!-- Four arm FK points used by rollout clearance/collision costs. -->
+    <framepos name="arm_shoulder_pos" objtype="xbody" objname="link02"/>
+    <framepos name="arm_elbow_pos" objtype="xbody" objname="link03"/>
+    <framepos name="arm_wrist_pos" objtype="xbody" objname="link04"/>
     <framepos name="ee_pos" objtype="site" objname="gripper_center"/>
     <framequat name="ee_quat" objtype="site" objname="gripper_center"/>
     <touch name="FR_touch" site="FR"/>

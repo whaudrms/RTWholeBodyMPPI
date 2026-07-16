@@ -11,7 +11,7 @@ from mani_mppi.utils.tasks import get_task
 
 import argparse
 
-def main(task):
+def main(task, viewer_render_rate=30.0):
     T = 2000  # 20 seconds
     VIEWER = True
 
@@ -37,8 +37,12 @@ def main(task):
         from mani_mppi.control.controllers.mppi_locomotion import MPPI
     agent = MPPI(task=task)
     # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
+    if viewer_render_rate <= 0:
+        raise ValueError("viewer_render_rate must be positive")
+    render_every = max(1, round(1.0 / (SIMULATION_STEP * viewer_render_rate)))
     simulator = Simulator(agent=agent, viewer=VIEWER, T=T, dt=SIMULATION_STEP, timeconst=TIMECONST,
-                          dampingratio=DAMPINGRATIO, model_path=sim_path, ctrl_rate=CTRL_UPDATE_RATE)
+                          dampingratio=DAMPINGRATIO, model_path=sim_path, ctrl_rate=CTRL_UPDATE_RATE,
+                          render_every=render_every)
     
     # Run simulation
     simulator.run()
@@ -52,7 +56,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run simulation with a specified task.")
     parser.add_argument('--task', type=str, required=True, choices=VALID_TASKS, 
                         help=f"Name of the task. Must be one of {VALID_TASKS}.")
+    parser.add_argument(
+        '--render-rate', type=float, default=60.0,
+        help='Viewer frames per simulated second (default: 30).',
+    )
     args = parser.parse_args()
 
     # Run main with the provided task
-    main(args.task)
+    main(args.task, viewer_render_rate=args.render_rate)

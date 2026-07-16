@@ -90,6 +90,8 @@ class BaseMPPI:
         self.state_rollouts = np.empty(
             (self.n_samples, self.horizon, full_state_dim), dtype=float
         )
+        self.capture_rollout_sensors = False
+        self.sensor_rollouts = None
         self.thread_local = threading.local()
         self.executor = ThreadPoolExecutor(
             max_workers=self.num_workers, initializer=self._thread_initializer
@@ -165,8 +167,14 @@ class BaseMPPI:
                 np.linspace(0, self.horizon - 1, self.n_knots)
             ).astype(int))
             noise = self.generate_noise((self.n_samples, len(indices), self.act_dim))
-            knots = self.trajectory[indices][None, :, :] + noise
-            actions = CubicSpline(indices, knots, axis=1)(np.arange(self.horizon))
+            # Preserve the full-rate nominal trajectory.  Interpolating the
+            # absolute actions from only a few knots smooths away short gait
+            # swing phases; only the exploration perturbation should be
+            # represented by the cubic spline.
+            smooth_noise = CubicSpline(indices, noise, axis=1)(
+                np.arange(self.horizon)
+            )
+            actions = self.trajectory[None, :, :] + smooth_noise
         else:
             raise ValueError(f"Unsupported sample_type: {self.sample_type}")
         return np.clip(actions, self.act_min, self.act_max)
@@ -174,13 +182,25 @@ class BaseMPPI:
     def _thread_initializer(self) -> None:
         self.thread_local.data = mujoco.MjData(self.model)
 
+    def enable_rollout_sensors(self) -> None:
+        """Capture model sensor outputs alongside each rollout state."""
+        self.capture_rollout_sensors = True
+        self.sensor_rollouts = np.empty(
+            (self.n_samples, self.horizon, self.model.nsensordata), dtype=float
+        )
+
     def _call_rollout(
-        self, initial_state: np.ndarray, controls: np.ndarray, states: np.ndarray
+        self,
+        initial_state: np.ndarray,
+        controls: np.ndarray,
+        states: np.ndarray,
+        sensors: np.ndarray | None = None,
     ) -> None:
         rollout.rollout(
             self.model, self.thread_local.data, skip_checks=True,
             nroll=states.shape[0], nstep=states.shape[1],
             initial_state=initial_state, control=controls, state=states,
+            sensordata=sensors,
         )
 
     def rollout_actions(self, observation: np.ndarray, controls: np.ndarray) -> np.ndarray:
@@ -210,6 +230,24 @@ class BaseMPPI:
                 (n_rollouts, self.horizon, full_state_dim), dtype=float
             )
 
+        sensor_rollouts = None
+        if self.capture_rollout_sensors:
+            expected_sensor_shape = (
+                n_rollouts,
+                self.horizon,
+                self.model.nsensordata,
+            )
+            if (
+                n_rollouts == self.n_samples
+                and self.sensor_rollouts is not None
+                and self.sensor_rollouts.shape == expected_sensor_shape
+            ):
+                sensor_rollouts = self.sensor_rollouts
+            else:
+                sensor_rollouts = np.empty(expected_sensor_shape, dtype=float)
+                if n_rollouts == self.n_samples:
+                    self.sensor_rollouts = sensor_rollouts
+
         initial = np.repeat(
             np.concatenate(([0.0], observation))[None, :], n_rollouts, axis=0
         )
@@ -228,6 +266,7 @@ class BaseMPPI:
                 initial[index],
                 controls[index],
                 state_rollouts[index],
+                None if sensor_rollouts is None else sensor_rollouts[index],
             )
             for index in chunks
         ]

@@ -58,7 +58,7 @@ class Simulator:
                 T = 200, dt = 0.01, viewer = True, gravity = True,
                 # stiff=False
                 timeconst=0.02, dampingratio=1.0, ctrl_rate=100,
-                save_dir="./frames", save_frames=False
+                save_dir="./frames", save_frames=False, render_every=1
                 ):
         # filter
 
@@ -66,6 +66,9 @@ class Simulator:
         self.agent = agent
         self.ctrl_rate = ctrl_rate
         self.update_ratio = max(1, 1/(dt*ctrl_rate))
+        self.render_every = int(render_every)
+        if self.render_every < 1:
+            raise ValueError("render_every must be at least 1")
         self.interpolate_cam = False
         # model
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
@@ -185,7 +188,11 @@ class Simulator:
             if reached:
                 self.agent.next_goal()
 
-            if self.viewer is not None and self.viewer.is_alive:
+            if (
+                self.viewer is not None
+                and self.viewer.is_alive
+                and t % self.render_every == 0
+            ):
                 self.viewer.add_marker(
                     pos=self.agent.body_ref[:3]*1,         # Position of the marker
                     size=[0.15, 0.15, 0.15],     # Size of the sphere
