@@ -19,7 +19,8 @@ DEFAULT_CONFIG_PATH = 'configs/mppi_locomotion.yml'
 DEFAULT_SIM_PATH = 'models/scene.xml'
 DEFAULT_ORIENTATION = [[1, 0, 0, 0]]
 STAND_BASE_HEIGHT = 0.543542
-BIG_BOX_TOP_HEIGHT = 0.35
+BIG_BOX_SCALE = 1.5
+BIG_BOX_TOP_HEIGHT = 0.35 * BIG_BOX_SCALE
 
 
 TASKS = {
@@ -45,13 +46,19 @@ TASKS = {
         "sim_path": DEFAULT_SIM_PATH
     },
     "big_box": {
-        # B2-height equivalents of the Go1 big-box waypoints. The obstacle
-        # itself keeps the original pose and 0.4 x 0.4 x 0.35 half-size.
+        # Scale the Go1 big-box footprint and route by 1.5 for B2 while
+        # preserving the original climb approach and orientation profile.
         "goal_pos": [[0, 0, STAND_BASE_HEIGHT],
-                     [0.4, 0, STAND_BASE_HEIGHT],
-                     [0.7, 0, STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT + 0.08],
-                     [1, 0, STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT + 0.03],
-                     [1, 0, STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT + 0.03]],
+                     [0.4 * BIG_BOX_SCALE, 0, STAND_BASE_HEIGHT],
+                     [0.7 * BIG_BOX_SCALE, 0,
+                      STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT
+                      + 0.08 * BIG_BOX_SCALE],
+                     [1.0 * BIG_BOX_SCALE, 0,
+                      STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT
+                      + 0.03 * BIG_BOX_SCALE],
+                     [1.0 * BIG_BOX_SCALE, 0,
+                      STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT
+                      + 0.03 * BIG_BOX_SCALE]],
         "default_orientation": DEFAULT_ORIENTATION,
         "cmd_vel": [[0.0, 0.0],
                     [0.5, 0.0],

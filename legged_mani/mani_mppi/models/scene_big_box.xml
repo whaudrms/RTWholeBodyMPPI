@@ -1,7 +1,7 @@
 <mujoco model="b2_z1_mppi_big_box_scene">
   <include file="b2_z1_4dof.xml"/>
 
-  <statistic center="0.5 0 0.45" extent="1.8"/>
+  <statistic center="0.75 0 0.6" extent="2.4"/>
 
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0.1 0.1 0.1"/>
@@ -24,8 +24,8 @@
     <light pos="0 0 2" dir="0 0 -1" directional="true"/>
     <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
           material="groundplane" friction="0.8 0.02 0.01" condim="6"/>
-    <body name="box" mocap="true" pos="1 0 0">
-      <geom name="box" type="box" size="0.4 0.4 0.35"
+    <body name="box" mocap="true" pos="1.5 0 0">
+      <geom name="box" type="box" size="0.6 0.6 0.525"
             material="big_box" friction="0.8 0.02 0.01" condim="6"/>
     </body>
   </worldbody>

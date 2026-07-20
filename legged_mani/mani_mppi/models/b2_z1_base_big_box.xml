@@ -6,8 +6,8 @@
   <worldbody>
     <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
           material="rollout_ground" friction="0.8 0.02 0.01" condim="6"/>
-    <body name="box" mocap="true" pos="1 0 0">
-      <geom name="box" type="box" size="0.4 0.4 0.35"
+    <body name="box" mocap="true" pos="1.5 0 0">
+      <geom name="box" type="box" size="0.6 0.6 0.525"
             material="rollout_box" friction="0.8 0.02 0.01" condim="6"/>
     </body>
   </worldbody>
