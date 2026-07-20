@@ -39,12 +39,16 @@ class MPPI(BaseMPPI):
         - MPPI sampling and cost calculation configurations.
     """
 
-    def __init__(self, task='stand') -> None:
+    def __init__(self, task='stand', rollout_mode=None) -> None:
         """
         Initialize the MPPI controller with task-specific configurations.
 
         Args:
             task (str): The name of the task ('stand', 'walk').
+            rollout_mode (str | None): ``gait`` keeps the phase-aligned gait
+                nominal. ``original`` reproduces the original Go1 MPPI
+                previous-solution and absolute-cubic sampling behavior. None
+                uses the task configuration unchanged.
         """
         print("Task: ", task)
 
@@ -76,6 +80,17 @@ class MPPI(BaseMPPI):
         self.R = np.diag(np.array(params['R_diag']))
         self.cost_func = self.calculate_total_cost
         self.nominal_from_gait = bool(params.get('nominal_from_gait', True))
+        if rollout_mode not in (None, 'gait', 'original'):
+            raise ValueError(
+                "rollout_mode must be None, 'gait', or 'original'"
+            )
+        if rollout_mode == 'gait':
+            self.nominal_from_gait = True
+            self.sample_type = 'cubic'
+        elif rollout_mode == 'original':
+            self.nominal_from_gait = False
+            self.sample_type = 'cubic_original'
+        self.rollout_mode = rollout_mode or 'configured'
         self.gait_startup_blend_steps = int(
             params.get('gait_startup_blend_steps', 50)
         )
@@ -115,6 +130,7 @@ class MPPI(BaseMPPI):
         # Debug information
         print(f"Initial goal {self.goal_index}: {self.goal_pos[self.goal_index] }")
         print(f"Initial gait {self.desired_gait[self.goal_index]}")
+        print(f"Rollout mode: {self.rollout_mode} ({self.sample_type})")
     
     def next_goal(self):
         """

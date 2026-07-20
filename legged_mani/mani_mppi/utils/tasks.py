@@ -95,7 +95,8 @@ TASKS = {
             [0.85, 0.00, 0.80],
             [2.0, 0.15, 0.80],
             [0.85, 0.15, 0.48],
-            [0.85, 0.00, 0.48],
+            [0.0, 0.00, 0.48],
+            [-1.0, 0.00, 0.80],
         ],
         # One [w, x, y, z] quaternion for each EE waypoint.
         "ee_goal_quat": [
@@ -103,11 +104,15 @@ TASKS = {
             [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
         ],
+        "ee_position_weight": 5000.0,
+        "ee_orientation_weight": 0.0, # no orientation tracking
+        "ee_terminal_scale": 5.0,
         "ee_pos_thresh": 0.03,
         "ee_ori_thresh": 1.0, # no orientation tracking
         # Wait after reaching each waypoint before switching to the next one.
-        "waiting_times": [20, 20, 20, 20],
+        "waiting_times": [20, 20, 20, 20, 20],
 
         "model_path": DEFAULT_MODEL_PATH,
         "config_path": "configs/mppi_locomani.yml",

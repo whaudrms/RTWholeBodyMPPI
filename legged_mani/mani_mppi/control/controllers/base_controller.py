@@ -175,6 +175,26 @@ class BaseMPPI:
                 np.arange(self.horizon)
             )
             actions = self.trajectory[None, :, :] + smooth_noise
+        elif self.sample_type == "cubic_original":
+            from scipy.interpolate import CubicSpline
+
+            # Faithful sampling rule from the original Go1 MPPI: retain only
+            # the trajectory values at the temporal knots, add noise there,
+            # and reconstruct each absolute candidate trajectory by spline.
+            indices = np.rint(
+                np.linspace(0, self.horizon - 1, self.n_knots)
+            ).astype(int)
+            if len(np.unique(indices)) != len(indices):
+                raise ValueError(
+                    "n_knots must not produce duplicate horizon indices"
+                )
+            noise = self.generate_noise(
+                (self.n_samples, self.n_knots, self.act_dim)
+            )
+            knot_points = self.trajectory[indices][None, :, :] + noise
+            actions = CubicSpline(indices, knot_points, axis=1)(
+                np.arange(self.horizon)
+            )
         else:
             raise ValueError(f"Unsupported sample_type: {self.sample_type}")
         return np.clip(actions, self.act_min, self.act_max)
