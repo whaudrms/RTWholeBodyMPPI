@@ -1,0 +1,741 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{hyperref}
+
+\geometry{margin=2.5cm}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\| #1 \right\|}
+\newcommand{\wnorm}[2]{\left\| #1 \right\|_{#2}^2}
+\newcommand{\skewmat}[1]{\left[ #1 \right]_\times}
+
+\title{OCS2 Legged Robot MPC: \\Mathematical Problem Formulation}
+\author{Note based on analysis of \texttt{ocs2\_legged\_robot} codebase}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%=============================================================================
+
+\section{Overview}
+%=============================================================================
+
+OCS2 legged robot MPC solves a \textbf{switched-system nonlinear optimal control problem (OCP)}
+in receding horizon fashion. The system is a quadruped robot with 4 legs, each having 3 actuated joints (12 joints total).
+
+The key architectural choice is:
+\begin{itemize}
+	\item \textbf{Dynamics model}: Centroidal dynamics (specifically, Single Rigid Body Dynamics --- SRBD).
+	\item \textbf{Contact handling}: \emph{Not} contact-implicit. Instead, contact mode sequences (which feet are in stance/swing) are \emph{predetermined} by a gait scheduler (frontend). The MPC solves the OCP \emph{conditioned on} this given mode schedule.
+	\item \textbf{Solver}: Multiple-shooting SQP (or DDP/IPM as alternatives), running at 50 Hz with a 1-second horizon.
+\end{itemize}
+
+This document describes (1) the MPC problem formulation in detail, and (2) the frontend components that feed into the MPC.
+
+%=============================================================================
+
+\section{State and Input Variables}
+%=============================================================================
+
+\subsection{State Vector}
+
+The state $\bm{x} \in \R^{6+6+n_j}$ is:
+\begin{equation}
+	\bm{x} = \begin{bmatrix} \bm{h} \\ \bm{q}_b \\ \bm{q}_j \end{bmatrix}
+	= \begin{bmatrix} \dot{\bm{p}}_{\text{com}} \\ \bm{\omega}_{\text{com}} \\ \bm{r}_b \\ \bm{\theta}_{zyx} \\ \bm{q}_j \end{bmatrix}
+	\in \R^{24}
+\end{equation}
+where:
+\begin{itemize}
+	\item $\bm{h} \in \R^6$: \textbf{Normalized centroidal momentum}, consisting of:
+	      \begin{itemize}
+		      \item $\dot{\bm{p}}_{\text{com}} = \frac{1}{m}\bm{l} \in \R^3$: Normalized linear momentum (= CoM velocity)
+		      \item $\bm{\omega}_{\text{com}} = \frac{1}{m}\bm{k} \in \R^3$: Normalized angular momentum
+	      \end{itemize}
+	\item $\bm{r}_b \in \R^3$: Base position in world frame $[x, y, z]^\top$
+	\item $\bm{\theta}_{zyx} \in \R^3$: Base orientation as ZYX Euler angles $[\theta_z, \theta_y, \theta_x]^\top$
+	\item $\bm{q}_j \in \R^{12}$: Joint angles for 4 legs $\times$ 3 joints each
+\end{itemize}
+
+\noindent The joint ordering is:
+\begin{equation*}
+	\bm{q}_j = [q_{\text{LF\_HAA}},\, q_{\text{LF\_HFE}},\, q_{\text{LF\_KFE}},\,
+	q_{\text{LH\_HAA}},\, \ldots,\,
+	q_{\text{RF\_HAA}},\, \ldots,\,
+	q_{\text{RH\_HAA}},\, \ldots,\, q_{\text{RH\_KFE}}]^\top
+\end{equation*}
+
+\subsection{Input Vector}
+
+The input $\bm{u} \in \R^{12+12}$ is:
+\begin{equation}
+	\bm{u} = \begin{bmatrix} \bm{f}_c \\ \dot{\bm{q}}_j \end{bmatrix}
+	\in \R^{24}
+\end{equation}
+where:
+\begin{itemize}
+	\item $\bm{f}_c \in \R^{12}$: Contact forces at 4 feet, each $\bm{f}_i \in \R^3$ in the world frame:
+	      \begin{equation*}
+		      \bm{f}_c = [\bm{f}_{\text{LF}}^\top,\, \bm{f}_{\text{RF}}^\top,\, \bm{f}_{\text{LH}}^\top,\, \bm{f}_{\text{RH}}^\top]^\top
+	      \end{equation*}
+	\item $\dot{\bm{q}}_j \in \R^{12}$: Joint velocities (same ordering as $\bm{q}_j$)
+\end{itemize}
+
+\noindent Note that the input contains \emph{contact forces} (not joint torques). The mapping from contact forces and joint velocities to actual joint torques is handled downstream by a whole-body controller (not part of this MPC).
+
+%=============================================================================
+
+\section{Dynamics: Single Rigid Body Model (SRBD)}
+\label{sec:dynamics}
+%=============================================================================
+
+\subsection{Centroidal Dynamics Equations}
+
+The dynamics $\dot{\bm{x}} = f(\bm{x}, \bm{u})$ are decomposed into four blocks:
+
+\subsubsection{Normalized Linear Momentum Rate}
+
+\begin{equation}
+	\boxed{
+		\ddot{\bm{p}}_{\text{com}} = \bm{g} + \frac{1}{m}\sum_{i \in \mathcal{C}(t)} \bm{f}_i
+	}
+\end{equation}
+where $\bm{g} = [0, 0, -9.81]^\top$ is gravity and $\mathcal{C}(t)$ is the set of active contact feet at time $t$.
+
+\subsubsection{Normalized Angular Momentum Rate}
+
+\begin{equation}
+	\boxed{
+		\dot{\bm{\omega}}_{\text{com}} = \frac{1}{m}\sum_{i \in \mathcal{C}(t)} \bm{r}_i \times \bm{f}_i
+	}
+\end{equation}
+where $\bm{r}_i = \bm{p}_{\text{foot},i} - \bm{p}_{\text{com}}$ is the position vector from the center of mass to the $i$-th contact point, computed via forward kinematics.
+
+\subsubsection{Base Pose Rate}
+
+\begin{align}
+	\dot{\bm{r}}_b          & = \dot{\bm{p}}_{\text{com}} \label{eq:base_pos_rate}                                       \\
+	\dot{\bm{\theta}}_{zyx} & = \bm{W}_{zyx}^{-1}(\bm{\theta}_{zyx})\, \bm{\omega}_{\text{com}} \label{eq:base_ori_rate}
+\end{align}
+where $\bm{W}_{zyx}$ is the mapping from ZYX Euler angle rates to angular velocity:
+\begin{equation}
+	\bm{\omega} = \bm{W}_{zyx}(\bm{\theta}_{zyx})\, \dot{\bm{\theta}}_{zyx}
+\end{equation}
+
+Note: Eq.~\eqref{eq:base_pos_rate} is an approximation --- strictly, $\dot{\bm{r}}_b \neq \dot{\bm{p}}_{\text{com}}$ because the base frame origin and CoM generally differ. The SRBD model assumes the offset $\bm{p}_{\text{com}} - \bm{r}_b$ is constant at the nominal configuration.
+
+\subsubsection{Joint Rate}
+
+\begin{equation}
+	\dot{\bm{q}}_j = \dot{\bm{q}}_j \quad \text{(input directly)}
+\end{equation}
+
+\subsection{SRBD Approximation}
+
+The ``Single Rigid Body Dynamics'' model (\texttt{centroidalModelType = 1}) makes a key simplification: the centroidal momentum matrix $\bm{A}_g$ relating generalized velocities to centroidal momentum is computed using the \emph{nominal} (default) joint configuration rather than the current configuration:
+\begin{equation}
+	\bm{A}_g^{\text{SRBD}} = \begin{bmatrix}
+		m\bm{I}_3 & m\skewmat{\bm{p}_{\text{com}}^0}\bm{W}_{zyx} & \bm{0} \\
+		\bm{0}    & \bm{I}_{\text{com}}^0 \bm{W}_{zyx}           & \bm{0}
+	\end{bmatrix}
+\end{equation}
+where $\bm{p}_{\text{com}}^0$ is the nominal CoM-to-base offset and $\bm{I}_{\text{com}}^0$ is the nominal centroidal inertia. This avoids recomputing the full centroidal inertia at every time step (as required by the Full Centroidal Dynamics variant, \texttt{centroidalModelType = 0}).
+
+\subsection{Contact Point Kinematics}
+
+The position of the $i$-th foot in the world frame is computed via Pinocchio forward kinematics:
+\begin{equation}
+	\bm{p}_{\text{foot},i} = \text{FK}_i(\bm{r}_b, \bm{\theta}_{zyx}, \bm{q}_j)
+\end{equation}
+The Jacobian $\bm{J}_i = \frac{\partial \bm{p}_{\text{foot},i}}{\partial \bm{q}_{\text{gen}}}$ maps generalized velocities to foot velocities:
+\begin{equation}
+	\dot{\bm{p}}_{\text{foot},i} = \bm{J}_i(\bm{q}_{\text{gen}})\, \dot{\bm{q}}_{\text{gen}}
+\end{equation}
+where $\bm{q}_{\text{gen}} = [\bm{r}_b^\top, \bm{\theta}_{zyx}^\top, \bm{q}_j^\top]^\top \in \R^{18}$ is the Pinocchio generalized coordinate vector.
+
+%=============================================================================
+
+\section{The Optimal Control Problem}
+\label{sec:ocp}
+%=============================================================================
+
+\subsection{Problem Statement}
+
+The MPC solves the following OCP at every control cycle:
+\begin{equation}
+	\boxed{
+		\begin{aligned}
+			\min_{\bm{u}(\cdot)} \quad & \int_{t_0}^{t_0+T} \ell(\bm{x}(t), \bm{u}(t), t)\, dt + \Phi(\bm{x}(t_0+T)) \\
+			\text{s.t.} \quad
+			                           & \dot{\bm{x}}(t) = f(\bm{x}(t), \bm{u}(t)),                                  \\
+			                           & \bm{g}_{\text{eq}}^{(\sigma(t))}(\bm{x}(t), \bm{u}(t)) = \bm{0},            \\
+			                           & \bm{g}_{\text{ineq}}^{(\sigma(t))}(\bm{x}(t), \bm{u}(t)) \geq \bm{0},       \\
+			                           & \bm{x}(t_0) = \hat{\bm{x}}(t_0),
+		\end{aligned}
+	}
+\end{equation}
+where:
+\begin{itemize}
+	\item $T = 1.0$ s is the prediction horizon
+	\item $\sigma(t) \in \{0, 1, \ldots, 15\}$ is the \textbf{contact mode} at time $t$, given by the gait scheduler (Section~\ref{sec:gait})
+	\item Equality and inequality constraints are \textbf{mode-dependent}: different constraints are active depending on which feet are in stance vs.\ swing
+	\item The dynamics $f$ are mode-independent (Section~\ref{sec:dynamics})
+\end{itemize}
+
+\subsection{Cost Function}
+\label{sec:cost}
+
+\subsubsection{Running Cost}
+
+\begin{equation}
+	\ell(\bm{x}, \bm{u}, t) = \wnorm{\bm{x} - \bm{x}^{\text{ref}}(t)}{\bm{Q}}
+	+ \wnorm{\bm{u} - \bm{u}^{\text{ref}}(t)}{\bm{R}}
+	+ \sum_{i \in \mathcal{C}(t)} p_{\text{friction},i}(\bm{u})
+\end{equation}
+where $\wnorm{\bm{v}}{\bm{M}} = \bm{v}^\top \bm{M} \bm{v}$.
+
+\paragraph{State Weight Matrix $\bm{Q}$.}
+$\bm{Q} = \text{diag}(\bm{q})$ with:
+\begin{equation}
+	\bm{q} = [\underbrace{15, 15, 30}_{\dot{\bm{p}}_{\text{com}}},\,
+	\underbrace{5, 10, 10}_{\bm{\omega}_{\text{com}}},\,
+	\underbrace{500, 500, 500}_{\bm{r}_b},\,
+	\underbrace{100, 200, 200}_{\bm{\theta}_{zyx}},\,
+	\underbrace{20, \ldots, 20}_{12 \text{ joints}}]
+\end{equation}
+
+\paragraph{Input Weight Matrix $\bm{R}$.}
+The input cost is defined in a task-space representation and then transformed to joint space. Define the task-space weight:
+\begin{equation}
+	\bm{R}_{\text{task}} = 10^{-3} \cdot \text{diag}([\underbrace{1, \ldots, 1}_{12 \text{ forces}},\,
+		\underbrace{5000, \ldots, 5000}_{12 \text{ foot velocities}}])
+\end{equation}
+The actual input weight $\bm{R}$ is:
+\begin{equation}
+	\bm{R} = \begin{bmatrix}
+		\bm{R}_{\text{task}}^{ff} & \bm{0}                                                                          \\
+		\bm{0}                    & \bm{J}_{\text{feet}}^{0\top} \bm{R}_{\text{task}}^{vv} \bm{J}_{\text{feet}}^{0}
+	\end{bmatrix}
+\end{equation}
+where $\bm{J}_{\text{feet}}^{0} \in \R^{12 \times 12}$ is the stacked foot-to-joint Jacobian evaluated at the nominal configuration. This transforms foot-velocity penalties into joint-velocity penalties.
+
+\paragraph{State Reference $\bm{x}^{\text{ref}}(t)$.}
+Generated by the target trajectory module from user commands (desired velocity, heading, CoM height):
+\begin{equation}
+	\bm{x}^{\text{ref}}(t) = [\dot{\bm{p}}_{\text{com}}^{\text{ref}\top},\; \bm{\omega}^{\text{ref}\top},\; \bm{r}_b^{\text{ref}\top}(t),\; \bm{\theta}^{\text{ref}\top}(t),\; \bm{q}_j^{\text{ref}\top}]^\top
+\end{equation}
+
+\paragraph{Input Reference $\bm{u}^{\text{ref}}(t)$ --- Weight Compensation.}
+The nominal input distributes the robot's weight equally among stance feet:
+\begin{equation}
+	\bm{u}^{\text{ref}}(t) = \begin{bmatrix} \bm{f}_c^{\text{ref}} \\ \bm{0}_{12} \end{bmatrix}, \quad
+	\bm{f}_i^{\text{ref}} = \begin{cases}
+		\displaystyle \begin{bmatrix} 0 \\ 0 \\ \frac{mg}{|\mathcal{C}(t)|} \end{bmatrix} & \text{if } i \in \mathcal{C}(t)    \\[8pt]
+		\bm{0}_3                                                                                   & \text{if } i \notin \mathcal{C}(t)
+	\end{cases}
+\end{equation}
+where $|\mathcal{C}(t)|$ is the number of stance legs at time $t$.
+
+\paragraph{Friction Cone Penalty $p_{\text{friction},i}(\bm{u})$.}
+When using soft constraints (default), the friction cone is enforced via a relaxed log-barrier penalty (Section~\ref{sec:friction_soft}).
+
+\subsubsection{Terminal Cost}
+
+\begin{equation}
+	\Phi(\bm{x}) = \wnorm{\bm{x} - \bm{x}^{\text{ref}}(t_0 + T)}{\bm{Q}}
+\end{equation}
+
+%=============================================================================
+
+\section{Constraints}
+\label{sec:constraints}
+%=============================================================================
+
+All constraints are \textbf{mode-dependent}: they switch on/off depending on the contact mode $\sigma(t)$. For each foot $i \in \{1, 2, 3, 4\}$ (LF, RF, LH, RH), define:
+\begin{equation}
+	c_i(t) = \begin{cases} 1 & \text{foot } i \text{ is in stance (contact)} \\ 0 & \text{foot } i \text{ is in swing} \end{cases}
+\end{equation}
+
+\subsection{Friction Cone Constraint}
+\label{sec:friction_cone}
+
+\textbf{Active when:} $c_i(t) = 1$ (stance).
+
+For each stance foot $i$, the contact force $\bm{f}_i = [F_x, F_y, F_z]^\top$ must lie within the Coulomb friction cone:
+\begin{equation}
+	\boxed{
+		h_i^{\text{fric}}(\bm{u}) = \mu (F_z + F_{\text{grip}}) - \sqrt{F_x^2 + F_y^2 + \varepsilon_{\text{reg}}} \geq 0
+	}
+\end{equation}
+where:
+\begin{itemize}
+	\item $\mu = 0.5$: friction coefficient
+	\item $F_{\text{grip}} = 0$: additional gripper force (zero for standard feet)
+	\item $\varepsilon_{\text{reg}} = 25.0$: regularization to avoid gradient singularity at $\bm{f}_{\text{tan}} = \bm{0}$
+\end{itemize}
+
+\paragraph{Derivatives:}
+\begin{align}
+	\frac{\partial h_i^{\text{fric}}}{\partial \bm{f}_i}     & = \begin{bmatrix}
+		                                                             -F_x / \tilde{F}_t \\
+		                                                             -F_y / \tilde{F}_t \\
+		                                                             \mu
+	                                                             \end{bmatrix}, \quad
+	\tilde{F}_t = \sqrt{F_x^2 + F_y^2 + \varepsilon_{\text{reg}}}                                                                                                                       \\[6pt]
+	\frac{\partial^2 h_i^{\text{fric}}}{\partial \bm{f}_i^2} & = \begin{bmatrix}
+		                                                             -(F_y^2 + \varepsilon_{\text{reg}})/\tilde{F}_t^3 & F_x F_y / \tilde{F}_t^3                           & 0 \\
+		                                                             F_x F_y / \tilde{F}_t^3                           & -(F_x^2 + \varepsilon_{\text{reg}})/\tilde{F}_t^3 & 0 \\
+		                                                             0                                                 & 0                                                 & 0
+	                                                             \end{bmatrix}
+\end{align}
+
+\subsubsection{Soft Constraint Formulation (Default)}
+\label{sec:friction_soft}
+
+When using the soft constraint formulation (default in the codebase), the friction cone inequality is converted to a penalty term added to the cost, using the \textbf{relaxed log-barrier} function:
+\begin{equation}
+	p_{\text{friction},i}(\bm{u}) = \begin{cases}
+		-\mu_b \ln(h_i^{\text{fric}})                                                                                 & \text{if } h_i^{\text{fric}} > \delta_b    \\
+		\mu_b \left[ \frac{1}{2}\left(\frac{h_i^{\text{fric}} - 2\delta_b}{\delta_b}\right)^2 - \ln(\delta_b) \right] & \text{if } h_i^{\text{fric}} \leq \delta_b
+	\end{cases}
+\end{equation}
+with barrier parameters $\mu_b = 0.1$, $\delta_b = 5.0$. This provides a smooth $C^1$ penalty that becomes increasingly steep as $h \to 0^+$, while avoiding the singularity of the pure log barrier.
+
+\subsection{Zero Force Constraint (Swing Phase)}
+\label{sec:zero_force}
+
+\textbf{Active when:} $c_i(t) = 0$ (swing).
+
+Swing feet cannot exert contact forces:
+\begin{equation}
+	\boxed{
+		\bm{g}_i^{\text{zf}}(\bm{u}) = \bm{f}_i = \bm{0}_3
+	}
+\end{equation}
+This is enforced as an \textbf{equality constraint}.
+
+\subsection{Zero Velocity Constraint (Stance Phase)}
+\label{sec:zero_vel}
+
+\textbf{Active when:} $c_i(t) = 1$ (stance).
+
+Stance feet must not slide on the ground:
+\begin{equation}
+	\boxed{
+		\bm{g}_i^{\text{zv}}(\bm{x}, \bm{u}) = \bm{A}_v \dot{\bm{p}}_{\text{foot},i}(\bm{x}, \bm{u}) + \bm{A}_x \bm{p}_{\text{foot},i}(\bm{x}) + \bm{b} = \bm{0}_3
+	}
+\end{equation}
+where:
+\begin{align}
+	\bm{A}_v & = \bm{I}_3, \quad \bm{A}_x = \text{diag}(0, 0, \alpha_p), \quad \bm{b} = \bm{0}_3
+\end{align}
+with $\alpha_p$ being the position error gain (set to 0 in the default configuration).
+
+When $\alpha_p = 0$, this simplifies to:
+\begin{equation}
+	\dot{\bm{p}}_{\text{foot},i} = \bm{0}_3
+\end{equation}
+which enforces that the foot velocity is zero in all three directions during stance --- the \textbf{no-slip} condition.
+
+The foot velocity is computed via the contact Jacobian:
+\begin{equation}
+	\dot{\bm{p}}_{\text{foot},i} = \bm{J}_i(\bm{q}_{\text{gen}}) \dot{\bm{q}}_{\text{gen}}
+\end{equation}
+
+\subsection{Normal Velocity Constraint (Swing Phase)}
+\label{sec:normal_vel}
+
+\textbf{Active when:} $c_i(t) = 0$ (swing).
+
+The vertical velocity of swing feet is constrained to follow the planned swing trajectory:
+\begin{equation}
+	\boxed{
+		g_i^{\text{nv}}(\bm{x}, \bm{u}, t) = \dot{z}_{\text{foot},i} + \alpha_p(z_{\text{foot},i} - z_i^{\text{ref}}(t)) + \dot{z}_i^{\text{ref}}(t) = 0
+	}
+\end{equation}
+where $z_i^{\text{ref}}(t)$ and $\dot{z}_i^{\text{ref}}(t)$ come from the swing trajectory planner (Section~\ref{sec:swing}).
+
+This is a scalar equality constraint that guides the foot's vertical motion through the planned swing arc.
+
+%=============================================================================
+
+\section{Constraint Activation Summary}
+%=============================================================================
+
+Table~\ref{tab:constraints} summarizes which constraints are active for each foot depending on its contact state.
+
+\begin{table}[h]
+	\centering
+	\caption{Constraint activation per foot.}
+	\label{tab:constraints}
+	\begin{tabular}{lcc}
+		\toprule
+		\textbf{Constraint}       & \textbf{Stance} ($c_i = 1$) & \textbf{Swing} ($c_i = 0$) \\
+		\midrule
+		Friction cone (ineq/soft) & \checkmark                  & ---                        \\
+		Zero force (eq)           & ---                         & \checkmark                 \\
+		Zero velocity (eq, 3D)    & \checkmark                  & ---                        \\
+		Normal velocity (eq, 1D)  & ---                         & \checkmark                 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+%=============================================================================
+
+\section{Frontend: Gait Scheduling}
+\label{sec:gait}
+%=============================================================================
+
+The gait scheduler is the primary \textbf{frontend} component. It determines the contact mode sequence $\sigma(t)$ over the MPC horizon \emph{before} the MPC optimization is solved.
+
+\subsection{Contact Mode Encoding}
+
+Each mode $\sigma \in \{0, 1, \ldots, 15\}$ encodes the contact state of all 4 feet as a 4-bit number:
+\begin{equation}
+	\sigma = 8 \cdot c_{\text{LF}} + 4 \cdot c_{\text{RF}} + 2 \cdot c_{\text{LH}} + 1 \cdot c_{\text{RH}}
+\end{equation}
+
+Key modes:
+\begin{center}
+	\begin{tabular}{cl}
+		\toprule
+		$\sigma$ & Description                   \\
+		\midrule
+		15       & STANCE: all 4 feet in contact \\
+		9        & LF + RH: trot diagonal pair   \\
+		6        & RF + LH: trot diagonal pair   \\
+		0        & FLY: no feet in contact       \\
+		\bottomrule
+	\end{tabular}
+\end{center}
+
+\subsection{Gait Definition}
+
+A gait is defined as a periodic template:
+\begin{equation}
+	\mathcal{G} = \big( T_{\text{gait}},\; \{\phi_1, \ldots, \phi_{K-1}\},\; \{\sigma_0, \sigma_1, \ldots, \sigma_{K-1}\} \big)
+\end{equation}
+where:
+\begin{itemize}
+	\item $T_{\text{gait}}$: gait cycle period [s]
+	\item $\phi_k \in (0, 1)$: phase at which the $k$-th mode transition occurs
+	\item $\sigma_k$: contact mode during the $k$-th phase interval
+\end{itemize}
+
+For example, a trotting gait might be:
+\begin{equation*}
+	\mathcal{G}_{\text{trot}} = \big(0.6,\; \{0.5\},\; \{9, 6\}\big)
+\end{equation*}
+meaning: period 0.6\,s, switching at phase 0.5, alternating between mode 9 (LF+RH stance) and mode 6 (RF+LH stance).
+
+\subsection{Mode Schedule Generation}
+\label{sec:mode_schedule}
+
+Given the current time $t_0$ and horizon $T$, the gait scheduler:
+\begin{enumerate}
+	\item Takes the current gait template $\mathcal{G}$
+	\item \textbf{Tiles} the template repeatedly to cover $[t_0, t_0 + T]$
+	\item Inserts a brief \textbf{stance transition phase} (duration $t_{\text{trans}} = 0.4$\,s) at every gait switch point to ensure smooth transitions
+	\item Outputs the \textbf{mode schedule}: a piecewise-constant function $\sigma: [t_0, t_0+T] \to \{0, \ldots, 15\}$ with switching times $\{t_1^s, t_2^s, \ldots\}$
+\end{enumerate}
+
+\begin{algorithm}
+	\caption{Mode Schedule Generation (\texttt{GaitSchedule::getModeSchedule})}
+	\begin{algorithmic}[1]
+		\STATE \textbf{Input:} current time $t$, horizon end $t + T$, gait template $\mathcal{G}$
+		\STATE Trim past events from schedule
+		\STATE If current end mode $\neq$ STANCE: insert stance phase of duration $t_{\text{trans}}$
+		\WHILE{schedule does not cover $t + T$}
+		\FOR{each phase in gait template}
+		\STATE Append mode and compute absolute event time from phase
+		\ENDFOR
+		\ENDWHILE
+		\STATE \textbf{Output:} event times $\{t_k^s\}$ and modes $\{\sigma_k\}$
+	\end{algorithmic}
+\end{algorithm}
+
+\subsection{Reference Manager}
+
+The \texttt{SwitchedModelReferenceManager} coordinates:
+\begin{enumerate}
+	\item Updating the mode schedule over the MPC horizon (from gait scheduler)
+	\item Updating swing foot trajectories (from swing planner, Section~\ref{sec:swing})
+	\item Providing contact flags $c_i(t)$ to all mode-dependent constraints
+\end{enumerate}
+
+At each MPC iteration, it calls:
+\begin{equation*}
+	\texttt{modifyReferences}(t_0, t_0 + T, \bm{x}_0, \text{targetTrajectories}, \text{modeSchedule})
+\end{equation*}
+
+%=============================================================================
+
+\section{Frontend: Swing Trajectory Planning}
+\label{sec:swing}
+%=============================================================================
+
+For each swing phase, a smooth foot trajectory in the vertical ($z$) direction is planned using cubic splines. This trajectory serves as a reference for the normal velocity constraint (Section~\ref{sec:normal_vel}).
+
+\subsection{Swing Phase Identification}
+
+Given the mode schedule, for each foot $i$, the planner identifies swing intervals $[t_{\text{lo}}, t_{\text{td}}]$ where:
+\begin{itemize}
+	\item $t_{\text{lo}}$: lift-off time (transition from $c_i=1$ to $c_i=0$)
+	\item $t_{\text{td}}$: touch-down time (transition from $c_i=0$ to $c_i=1$)
+\end{itemize}
+
+\subsection{Vertical Trajectory Construction}
+
+A cubic spline $z_i^{\text{ref}}(t)$ is constructed with three nodes:
+
+\begin{itemize}
+	\item \textbf{Lift-off node:} $(t_{\text{lo}},\; z_{\text{lo}},\; s \cdot v_{\text{lo}})$
+	\item \textbf{Mid-swing peak:} $z_{\text{mid}} = \min(z_{\text{lo}}, z_{\text{td}}) + s \cdot h_{\text{swing}}$
+	\item \textbf{Touch-down node:} $(t_{\text{td}},\; z_{\text{td}},\; s \cdot v_{\text{td}})$
+\end{itemize}
+
+where the scaling factor adapts to short swing phases:
+\begin{equation}
+	s = \min\left(1,\; \frac{t_{\text{td}} - t_{\text{lo}}}{t_{\text{scale}}}\right)
+\end{equation}
+
+Configuration parameters:
+\begin{center}
+	\begin{tabular}{lcl}
+		\toprule
+		Parameter          & Value      & Description                        \\
+		\midrule
+		$v_{\text{lo}}$    & $0.2$ m/s  & Initial vertical lift-off velocity \\
+		$v_{\text{td}}$    & $-0.4$ m/s & Final vertical touch-down velocity \\
+		$h_{\text{swing}}$ & $0.1$ m    & Maximum swing height above terrain \\
+		$t_{\text{scale}}$ & $0.15$ s   & Minimum reference swing duration   \\
+		\bottomrule
+	\end{tabular}
+\end{center}
+
+The resulting trajectory provides $z_i^{\text{ref}}(t)$ and $\dot{z}_i^{\text{ref}}(t)$ used in the normal velocity constraint (Section~\ref{sec:normal_vel}).
+
+%=============================================================================
+
+\section{Frontend: Pre-Computation and Dynamic Constraint Updates}
+\label{sec:precomp}
+%=============================================================================
+
+The \texttt{LeggedRobotPreComputation} module runs before each constraint/cost evaluation and dynamically configures time-varying constraint parameters:
+
+\begin{enumerate}
+	\item Reads current contact flags $c_i(t)$ from the reference manager
+	\item For each swing foot, queries the swing trajectory planner:
+	      \begin{align}
+		      \dot{z}_i^{\text{ref}}(t) & \leftarrow \texttt{getZvelocityConstraint}(i, t) \\
+		      z_i^{\text{ref}}(t)       & \leftarrow \texttt{getZpositionConstraint}(i, t)
+	      \end{align}
+	\item Updates the normal velocity constraint configuration:
+	      \begin{align}
+		      \bm{b}   & = -\dot{z}_i^{\text{ref}}(t)                                                   \\
+		      \bm{A}_x & = \alpha_p \cdot [0, 0, 1]^\top, \quad \text{adjusted by } z_i^{\text{ref}}(t)
+	      \end{align}
+\end{enumerate}
+
+This mechanism allows constraints to be time-varying (tracking swing trajectories) while using a static constraint interface.
+
+%=============================================================================
+
+\section{Solver Configuration}
+\label{sec:solver}
+%=============================================================================
+
+\subsection{Multiple Shooting Transcription}
+
+The continuous-time OCP is discretized using multiple shooting with $N \approx 67$ nodes:
+\begin{equation}
+	t_k = t_0 + k \cdot \Delta t, \quad \Delta t = 0.015\text{\,s}, \quad k = 0, \ldots, N
+\end{equation}
+
+At each node, the dynamics are integrated using a 2nd-order Runge-Kutta (RK2) scheme:
+\begin{equation}
+	\bm{x}_{k+1} = \bm{x}_k + \Delta t \cdot f\!\left(\bm{x}_k + \tfrac{\Delta t}{2} f(\bm{x}_k, \bm{u}_k),\; \bm{u}_k\right)
+\end{equation}
+
+\subsection{SQP Solver (Default)}
+
+The default solver is Sequential Quadratic Programming with:
+\begin{center}
+	\begin{tabular}{lcl}
+		\toprule
+		Parameter            & Value     & Description                   \\
+		\midrule
+		SQP iterations       & 1         & Single QP solve per MPC cycle \\
+		Threads              & 3         & Parallel shooting             \\
+		$\Delta t$           & 0.015\,s  & Discretization step           \\
+		Integrator           & RK2       & 2nd-order Runge-Kutta         \\
+		Feedback policy      & true      & Returns linear feedback gains \\
+		Constraint tolerance & $10^{-4}$ & Convergence criterion         \\
+		\bottomrule
+	\end{tabular}
+\end{center}
+
+Since only 1 SQP iteration is performed per MPC cycle, the solver relies on warm-starting from the previous solution. The MPC runs at 50\,Hz with a multi-rate thread at 400\,Hz for interpolating the policy.
+
+\subsection{Alternative Solvers}
+
+\begin{itemize}
+	\item \textbf{DDP (SLQ variant):} Uses iterative LQ approximation with line search. Soft constraints via augmented Lagrangian penalty ($\lambda_0 = 20.0$, growth rate $2.0$).
+	\item \textbf{IPM:} Interior point method with barrier parameter schedule (initial $10^{-4}$, target $10^{-4}$).
+\end{itemize}
+
+%=============================================================================
+
+\section{Complete Discretized OCP}
+\label{sec:discrete_ocp}
+%=============================================================================
+
+Collecting all components, the discretized problem solved at each MPC cycle is:
+
+\begin{equation}
+	\boxed{
+		\begin{aligned}
+			\min_{\bm{x}_{0:N},\, \bm{u}_{0:N-1}} \quad
+			 & \sum_{k=0}^{N-1} \left[
+				\wnorm{\bm{x}_k - \bm{x}_k^{\text{ref}}}{\bm{Q}}
+				+ \wnorm{\bm{u}_k - \bm{u}_k^{\text{ref}}}{\bm{R}}
+				+ \sum_{i:\, c_i(t_k)=1} p_{\text{fric},i}(\bm{u}_k)
+				\right]
+			+ \wnorm{\bm{x}_N - \bm{x}_N^{\text{ref}}}{\bm{Q}}                                                                \\[6pt]
+			\text{s.t.} \quad
+			 & \bm{x}_{k+1} = \bm{x}_k + \Delta t \cdot f_{\text{RK2}}(\bm{x}_k, \bm{u}_k),
+			\quad k = 0, \ldots, N{-}1                                                                                        \\[4pt]
+			%--- stance constraints ---
+			 & \dot{\bm{p}}_{\text{foot},i}(\bm{x}_k, \bm{u}_k) = \bm{0},
+			\quad \forall\, i : c_i(t_k) = 1
+			\quad \text{(no-slip)}                                                                                            \\[4pt]
+			%--- swing constraints ---
+			 & \bm{f}_i = \bm{0},
+			\quad \forall\, i : c_i(t_k) = 0
+			\quad \text{(zero force)}                                                                                         \\[4pt]
+			 & \dot{z}_{\text{foot},i} = -\dot{z}_i^{\text{ref}}(t_k) - \alpha_p (z_{\text{foot},i} - z_i^{\text{ref}}(t_k)),
+			\quad \forall\, i : c_i(t_k) = 0
+			\quad \text{(swing traj.)}                                                                                        \\[4pt]
+			%--- friction cone (if hard) ---
+			 & \mu F_{z,i} \geq \sqrt{F_{x,i}^2 + F_{y,i}^2 + \varepsilon},
+			\quad \forall\, i : c_i(t_k) = 1
+			\quad \text{(friction, if hard)}                                                                                  \\[4pt]
+			%--- initial condition ---
+			 & \bm{x}_0 = \hat{\bm{x}}(t_0)
+		\end{aligned}
+	}
+\end{equation}
+
+%=============================================================================
+
+\section{Summary of the Full Pipeline}
+\label{sec:pipeline}
+%=============================================================================
+
+The complete legged robot MPC pipeline consists of the following components running in a loop:
+
+\begin{enumerate}
+	\item \textbf{State Estimation} (external): Provides current state $\hat{\bm{x}}(t_0)$
+
+	\item \textbf{Gait Scheduler} (frontend):
+	      \begin{itemize}
+		      \item Selects gait template (trot, walk, pace, etc.) based on user command
+		      \item Tiles the template over $[t_0, t_0+T]$
+		      \item Outputs mode schedule $\sigma(t)$ and event times
+	      \end{itemize}
+
+	\item \textbf{Reference Manager} (frontend):
+	      \begin{itemize}
+		      \item Generates target state trajectory $\bm{x}^{\text{ref}}(t)$ from velocity commands
+		      \item Computes weight-compensating input reference $\bm{u}^{\text{ref}}(t)$
+		      \item Extracts per-foot contact flags $c_i(t)$ from mode schedule
+	      \end{itemize}
+
+	\item \textbf{Swing Trajectory Planner} (frontend):
+	      \begin{itemize}
+		      \item For each swing phase, plans vertical foot trajectory via cubic spline
+		      \item Provides $z_i^{\text{ref}}(t)$, $\dot{z}_i^{\text{ref}}(t)$ to the normal velocity constraint
+	      \end{itemize}
+
+	\item \textbf{MPC Solver} (core):
+	      \begin{itemize}
+		      \item Solves the OCP (Section~\ref{sec:discrete_ocp}) via SQP/DDP/IPM
+		      \item Outputs optimal trajectory $\bm{x}^*(t)$, $\bm{u}^*(t)$ and (optionally) feedback gains
+	      \end{itemize}
+
+	\item \textbf{Whole-Body Controller} (downstream, not part of OCS2):
+	      \begin{itemize}
+		      \item Maps centroidal-level commands ($\bm{f}_i$, $\dot{\bm{q}}_j$) to actual joint torques
+		      \item Typically a QP-based inverse dynamics or task-space controller
+	      \end{itemize}
+\end{enumerate}
+
+\begin{figure}[h]
+	\centering
+	\begin{verbatim}
+  User Command        State Estimate
+       |                    |
+       v                    v
+  +-----------+    +------------------+
+  |   Gait    |--->|    Reference     |
+  | Scheduler |    |    Manager       |
+  +-----------+    +------------------+
+       |                    |
+       | mode schedule      | x_ref, u_ref, contact flags
+       |                    |
+       |    +------------+  |
+       +--->|   Swing    |<-+
+            | Trajectory |
+            |  Planner   |
+            +------------+
+                  |
+                  | z_ref(t), dz_ref(t)
+                  v
+          +---------------+
+          |   MPC Solver  |
+          | (SQP/DDP/IPM) |
+          +---------------+
+                  |
+                  | x*(t), u*(t), feedback gains
+                  v
+          +---------------+
+          |  Whole-Body   |
+          |  Controller   |
+          +---------------+
+                  |
+                  v
+             Joint Torques
+\end{verbatim}
+	\caption{OCS2 Legged Robot MPC Pipeline}
+\end{figure}
+
+%=============================================================================
+
+\section{Key Design Decisions and Notes}
+%=============================================================================
+
+\begin{itemize}
+	\item \textbf{Contact is NOT implicit.} Unlike contact-implicit trajectory optimization (e.g., complementarity-based methods), OCS2 relies on a predetermined mode schedule. The gait scheduler decides \emph{when} each foot is in stance/swing. The MPC does not optimize over contact timing.
+
+	\item \textbf{Foothold placement is implicit.} While the contact \emph{timing} is fixed, the contact \emph{location} (where the foot lands) is not explicitly planned. Instead, it emerges from the optimization: the zero-velocity constraint pins the foot during stance, and the swing trajectory guides the foot in $z$, but the $x, y$ landing position is determined by the optimizer minimizing the cost.
+
+	\item \textbf{SRBD vs.\ Full Centroidal.} The default SRBD model keeps the centroidal inertia constant, which is faster but less accurate for robots with heavy limbs. Setting \texttt{centroidalModelType = 0} enables full centroidal dynamics where $\bm{A}_g$ is recomputed at every configuration.
+
+	\item \textbf{CppAD automatic differentiation.} Constraints and dynamics are differentiated automatically using CppAD. The generated libraries are cached in \texttt{/tmp/ocs2} and recompiled when model parameters change.
+
+	\item \textbf{No joint torque limits in MPC.} The MPC operates in the force/velocity space and does not enforce actuator torque limits. These must be handled by the downstream whole-body controller.
+
+	\item \textbf{Flat terrain assumption.} The basic legged robot example assumes flat ground at $z = 0$. The advanced perceptive locomotion example (\texttt{ocs2\_perceptive\_anymal}) extends this to uneven terrain.
+\end{itemize}
+
+\end{document}

@@ -242,18 +242,16 @@ class MPPI(BaseMPPI):
         actions = self.perturb_action()
         self.obs = obs
 
-        # Calculate the direction and distance to the goal
-        horizontal_direction = self.body_ref[:2] - obs[:2]
-        goal_delta = np.linalg.norm(horizontal_direction)
+        # Match the original Go1 controller: point the body toward the full
+        # 3-D goal. A raised waypoint therefore generates a nose-up pitch
+        # reference before the robot climbs the obstacle.
+        direction = self.body_ref[:3] - obs[:3]
+        goal_delta = np.linalg.norm(direction)
 
         # Update desired orientation based on the goal position
         if goal_delta > 0.1 and not self.timer.waiting:
-            current_horizontal = np.array([obs[0], obs[1], 0.0])
-            target_horizontal = np.array(
-                [self.body_ref[0], self.body_ref[1], 0.0]
-            )
             self.goal_ori = calculate_orientation_quaternion(
-                current_horizontal, target_horizontal
+                obs[:3], self.body_ref[:3]
             )
         else:
             self.goal_ori = np.array([1, 0, 0, 0])

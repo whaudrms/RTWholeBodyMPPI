@@ -1,0 +1,19 @@
+<mujoco model="b2_z1_mppi_big_box_rollout">
+  <!-- MPPI rollout model for the big-box task. Keep this contact geometry in
+       sync with scene_big_box.xml, which is used by the simulator. -->
+  <include file="b2_z1_4dof.xml"/>
+
+  <worldbody>
+    <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
+          material="rollout_ground" friction="0.8 0.02 0.01" condim="6"/>
+    <body name="box" mocap="true" pos="1 0 0">
+      <geom name="box" type="box" size="0.4 0.4 0.35"
+            material="rollout_box" friction="0.8 0.02 0.01" condim="6"/>
+    </body>
+  </worldbody>
+
+  <asset>
+    <material name="rollout_ground" rgba="0.2 0.3 0.4 1"/>
+    <material name="rollout_box" rgba="0 0.4 1 1"/>
+  </asset>
+</mujoco>

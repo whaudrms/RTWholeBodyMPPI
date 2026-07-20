@@ -19,6 +19,7 @@ DEFAULT_CONFIG_PATH = 'configs/mppi_locomotion.yml'
 DEFAULT_SIM_PATH = 'models/scene.xml'
 DEFAULT_ORIENTATION = [[1, 0, 0, 0]]
 STAND_BASE_HEIGHT = 0.543542
+BIG_BOX_TOP_HEIGHT = 0.35
 
 
 TASKS = {
@@ -42,6 +43,31 @@ TASKS = {
         "model_path": DEFAULT_MODEL_PATH,
         "config_path": DEFAULT_CONFIG_PATH,
         "sim_path": DEFAULT_SIM_PATH
+    },
+    "big_box": {
+        # B2-height equivalents of the Go1 big-box waypoints. The obstacle
+        # itself keeps the original pose and 0.4 x 0.4 x 0.35 half-size.
+        "goal_pos": [[0, 0, STAND_BASE_HEIGHT],
+                     [0.4, 0, STAND_BASE_HEIGHT],
+                     [0.7, 0, STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT + 0.08],
+                     [1, 0, STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT + 0.03],
+                     [1, 0, STAND_BASE_HEIGHT + BIG_BOX_TOP_HEIGHT + 0.03]],
+        "default_orientation": DEFAULT_ORIENTATION,
+        "cmd_vel": [[0.0, 0.0],
+                    [0.5, 0.0],
+                    [0.5, 0.0],
+                    [0.5, 0.0],
+                    [0.0, 0.0]],
+        "goal_thresh": [0.2] * 5,
+        "desired_gait": ['in_place',
+                         'walk',
+                         'trot',
+                         'trot',
+                         'in_place'],
+        "waiting_times": [50, 0, 0, 0, 200],
+        "model_path": 'models/b2_z1_base_big_box.xml',
+        "config_path": "configs/mppi_big_box.yml",
+        "sim_path": 'models/scene_big_box.xml'
     },
     "stand": {
         "goal_pos": [[0, 0, STAND_BASE_HEIGHT]],

@@ -104,6 +104,7 @@ python3 -m legged_mani.scripts.simulate_mppi --list-tasks
 python3 -m legged_mani.scripts.simulate_mppi --task sit_hold
 python3 -m legged_mani.scripts.simulate_mppi --task stand_hold
 python3 -m legged_mani.scripts.simulate_mppi --task in_place
+python3 -m legged_mani.scripts.simulate_mppi --task big_box
 ```
 
 To validate a 32-row gait reference without controller or contact-dynamics
@@ -186,4 +187,5 @@ All required runtime assets were copied beneath `models/assets`.
   simulation-ready B2 MJCF.
 - Position-PD gains are initial values from the supplied Gazebo controller
   configurations and still require task-level tuning.
-- The current world intentionally contains only the robot and floor.
+- The default world contains only the robot and floor; the optional
+  `big_box` task adds the matching box geometry to simulator and MPPI models.

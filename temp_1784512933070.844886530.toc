@@ -1,0 +1,46 @@
+\contentsline {section}{\numberline {1}Overview}{3}{section.1}%
+\contentsline {section}{\numberline {2}State and Input Variables}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}State Vector}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Input Vector}{3}{subsection.2.2}%
+\contentsline {section}{\numberline {3}Dynamics: Single Rigid Body Model (SRBD)}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Centroidal Dynamics Equations}{4}{subsection.3.1}%
+\contentsline {subsubsection}{\numberline {3.1.1}Normalized Linear Momentum Rate}{4}{subsubsection.3.1.1}%
+\contentsline {subsubsection}{\numberline {3.1.2}Normalized Angular Momentum Rate}{4}{subsubsection.3.1.2}%
+\contentsline {subsubsection}{\numberline {3.1.3}Base Pose Rate}{4}{subsubsection.3.1.3}%
+\contentsline {subsubsection}{\numberline {3.1.4}Joint Rate}{4}{subsubsection.3.1.4}%
+\contentsline {subsection}{\numberline {3.2}SRBD Approximation}{4}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Contact Point Kinematics}{5}{subsection.3.3}%
+\contentsline {section}{\numberline {4}The Optimal Control Problem}{5}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Problem Statement}{5}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Cost Function}{5}{subsection.4.2}%
+\contentsline {subsubsection}{\numberline {4.2.1}Running Cost}{5}{subsubsection.4.2.1}%
+\contentsline {paragraph}{State Weight Matrix $\bm {Q}$.}{5}{section*.2}%
+\contentsline {paragraph}{Input Weight Matrix $\bm {R}$.}{6}{section*.3}%
+\contentsline {paragraph}{State Reference $\bm {x}^{\text {ref}}(t)$.}{6}{section*.4}%
+\contentsline {paragraph}{Input Reference $\bm {u}^{\text {ref}}(t)$ --- Weight Compensation.}{6}{section*.5}%
+\contentsline {paragraph}{Friction Cone Penalty $p_{\text {friction},i}(\bm {u})$.}{6}{section*.6}%
+\contentsline {subsubsection}{\numberline {4.2.2}Terminal Cost}{6}{subsubsection.4.2.2}%
+\contentsline {section}{\numberline {5}Constraints}{6}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Friction Cone Constraint}{6}{subsection.5.1}%
+\contentsline {paragraph}{Derivatives:}{7}{section*.7}%
+\contentsline {subsubsection}{\numberline {5.1.1}Soft Constraint Formulation (Default)}{7}{subsubsection.5.1.1}%
+\contentsline {subsection}{\numberline {5.2}Zero Force Constraint (Swing Phase)}{7}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Zero Velocity Constraint (Stance Phase)}{7}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Normal Velocity Constraint (Swing Phase)}{8}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Constraint Activation Summary}{8}{section.6}%
+\contentsline {section}{\numberline {7}Frontend: Gait Scheduling}{8}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Contact Mode Encoding}{8}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Gait Definition}{8}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Mode Schedule Generation}{9}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Reference Manager}{9}{subsection.7.4}%
+\contentsline {section}{\numberline {8}Frontend: Swing Trajectory Planning}{9}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Swing Phase Identification}{10}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Vertical Trajectory Construction}{10}{subsection.8.2}%
+\contentsline {section}{\numberline {9}Frontend: Pre-Computation and Dynamic Constraint Updates}{10}{section.9}%
+\contentsline {section}{\numberline {10}Solver Configuration}{11}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Multiple Shooting Transcription}{11}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}SQP Solver (Default)}{11}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Alternative Solvers}{11}{subsection.10.3}%
+\contentsline {section}{\numberline {11}Complete Discretized OCP}{11}{section.11}%
+\contentsline {section}{\numberline {12}Summary of the Full Pipeline}{12}{section.12}%
+\contentsline {section}{\numberline {13}Key Design Decisions and Notes}{12}{section.13}%

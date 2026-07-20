@@ -3,8 +3,9 @@ import os
 import sys
 from pathlib import Path
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+package_root = str(Path(__file__).resolve().parents[1])
+if package_root not in sys.path:
+    sys.path.insert(0, package_root)
 
 from mani_mppi.interface.simulator import Simulator
 from mani_mppi.utils.tasks import get_task
@@ -50,7 +51,7 @@ def main(task, viewer_render_rate=30.0):
 
 if __name__ == "__main__":
     # Define valid tasks
-    VALID_TASKS = ['stand', 'walk_straight', 'locomani']
+    VALID_TASKS = ['stand', 'walk_straight', 'big_box', 'locomani']
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run simulation with a specified task.")
