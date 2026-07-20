@@ -1,0 +1,783 @@
+% !TeX program = pdflatex
+\documentclass[11pt,a4paper]{article}
+
+% Compile with pdfLaTeX:
+%   latexmk -pdf legged_mppi_analysis_draft_en.tex
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\geometry{margin=2.4cm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black,
+  citecolor=blue!55!black
+}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\wnorm}[2]{\left\lVert #1 \right\rVert_{#2}^2}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\code{legged\_mppi}: Whole-Body Locomotion MPPI\\
+Mathematical Formulation and Implementation Analysis}
+\author{Notes based on analysis of the \code{legged\_mppi} codebase}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{Scope and Executive Summary}
+%=============================================================================
+
+This document analyzes the locomotion controller implemented by
+\code{legged\_mppi}.  The presentation follows the problem-oriented style of
+the accompanying OCS2 legged-MPC note, but the mathematical description here
+is derived from the actual Python, YAML, gait, and MuJoCo files in this
+repository.  The primary implementation sources are:
+\begin{itemize}
+  \item \code{control/controllers/base\_controller.py},
+  \item \code{control/controllers/mppi\_locomotion.py},
+  \item \code{control/gait\_scheduler/scheduler.py},
+  \item \code{utils/tasks.py} and the \code{mppi\_gait\_config\_*.yml} files,
+  \item the Go1 MJCF files under \code{models/go1}, and
+  \item \code{interface/simulator.py} and
+        \code{scripts/run\_mppi\_locomotion.py}.
+\end{itemize}
+
+The main architectural choices are:
+\begin{enumerate}
+  \item The controller uses the complete 37-dimensional floating-base Go1
+        state rather than a reduced centroidal state.
+  \item The optimized input is a sequence of 12 desired joint positions, not
+        joint torques, joint velocities, or contact forces.
+  \item Nonlinear rigid-body dynamics and contact are evaluated by parallel
+        MuJoCo rollouts.  No analytical dynamics derivatives are required.
+  \item A periodic, precomputed 24-row gait file supplies desired joint
+        positions and velocities over the prediction horizon.
+  \item Each rollout is scored by body-state tracking, gait tracking, and a
+        virtual PD-effort penalty.
+  \item The implemented update is an MPPI-style exponentially weighted mean
+        of sampled absolute action sequences.  It is not the canonical
+        path-integral noise-increment update.
+\end{enumerate}
+
+Contact is therefore \emph{implicit in the rollout model}.  The gait file is
+a kinematic motion prior; it does not impose a hard stance/swing contact-mode
+schedule.  Feasibility is produced by action clipping, MuJoCo joint and force
+limits, and the simulated contact dynamics rather than explicit OCP
+constraints.
+
+%=============================================================================
+\section{Robot Model, State, and Input}
+%=============================================================================
+
+\subsection{Degrees of Freedom and Joint Order}
+
+The locomotion model is a floating-base Unitree Go1 with twelve actuated
+joints.  Its MuJoCo dimensions are
+\begin{equation}
+  n_q=19, \qquad n_v=18, \qquad n_u=12.
+\end{equation}
+The actuator order used consistently by the controller is
+\begin{align}
+\bm{q}_j = [&q_{\mathrm{FR,h}},q_{\mathrm{FR,t}},q_{\mathrm{FR,c}},
+q_{\mathrm{FL,h}},q_{\mathrm{FL,t}},q_{\mathrm{FL,c}}, \nonumber\\
+&q_{\mathrm{RR,h}},q_{\mathrm{RR,t}},q_{\mathrm{RR,c}},
+q_{\mathrm{RL,h}},q_{\mathrm{RL,t}},q_{\mathrm{RL,c}}]^\top ,
+\end{align}
+where $\mathrm{h}$, $\mathrm{t}$, and $\mathrm{c}$ denote hip abduction,
+thigh, and calf joints, respectively.
+
+\subsection{Observation State}
+
+The controller observation concatenates MuJoCo \code{qpos} and \code{qvel}:
+\begin{equation}
+  \boxed{
+  \bm{x}=
+  \begin{bmatrix}
+    \bm{p}_b\\
+    \bm{q}_b\\
+    \bm{q}_j\\
+    \bm{v}_b\\
+    \bm{\omega}_b\\
+    \dot{\bm{q}}_j
+  \end{bmatrix}
+  \in\R^{37}.}
+  \label{eq:state}
+\end{equation}
+Here $\bm{p}_b\in\R^3$ is the floating-base position in the world frame,
+$\bm{q}_b=[q_w,q_x,q_y,q_z]^\top\in\mathbb{S}^3$ is its quaternion,
+$\bm{q}_j\in\R^{12}$ is the joint position, $\bm{v}_b$ and
+$\bm{\omega}_b$ are base linear and angular velocities, and
+$\dot{\bm{q}}_j\in\R^{12}$ contains joint velocities.
+
+\begin{center}
+\begin{tabular}{ccl}
+\toprule
+Python slice & Dimension & Quantity\\
+\midrule
+$0{:}3$   & 3  & base position $\bm{p}_b$\\
+$3{:}7$   & 4  & base quaternion $\bm{q}_b$\\
+$7{:}19$  & 12 & joint position $\bm{q}_j$\\
+$19{:}22$ & 3  & base linear velocity $\bm{v}_b$\\
+$22{:}25$ & 3  & base angular velocity $\bm{\omega}_b$\\
+$25{:}37$ & 12 & joint velocity $\dot{\bm{q}}_j$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+MuJoCo's \code{FULLPHYSICS} rollout state additionally stores time:
+\begin{equation}
+  \bm{x}^{\mathrm{full}}=
+  [t,\bm{q}_{\mathrm{pos}}^\top,\bm{q}_{\mathrm{vel}}^\top]^\top
+  \in\R^{38}.
+\end{equation}
+The implementation removes the first element before evaluating cost.
+
+\subsection{Control Input and Low-Level Actuation}
+
+The optimized input is a desired joint-position vector:
+\begin{equation}
+  \boxed{\bm{u}=\bm{q}_{j,\mathrm{des}}\in\R^{12}},
+  \qquad \bm{u}_{\min}\leq\bm{u}\leq\bm{u}_{\max}.
+  \label{eq:input}
+\end{equation}
+The limits are repeated once per leg:
+\begin{equation}
+  \bm{u}_{\min}^{\mathrm{leg}}=
+  [-0.863,-0.686,-2.818]^\top,
+  \quad
+  \bm{u}_{\max}^{\mathrm{leg}}=
+  [0.863,4.501,-0.888]^\top.
+\end{equation}
+
+In the default rollout MJCF, an affine position actuator approximately applies
+\begin{equation}
+  \tau_i=operatorname{sat}_{[\tau_i^-,\tau_i^+]}
+  \left(55(u_i-q_{j,i})-3\dot q_{j,i}\right).
+  \label{eq:mjcf_pd}
+\end{equation}
+The nominal force range is $[-23.7,23.7]$ N m, enlarged to
+$[-35.55,35.55]$ N m for the calf.  The hardware interface sends the same
+desired positions in Unitree position-control mode with $K_p=55$, $K_d=3$,
+zero desired velocity, and zero feedforward torque.
+
+%=============================================================================
+\section{Prediction Dynamics and Contact}
+%=============================================================================
+
+\subsection{Discrete MuJoCo Dynamics}
+
+For analysis, one rollout step can be written as
+\begin{equation}
+  \bm{x}_{k+1}=F_{\mathrm{MJ}}
+  (\bm{x}_k,\bm{u}_k;\mathcal{M},\Delta t,\bm{\eta}),
+  \label{eq:mujoco_dynamics}
+\end{equation}
+where $\mathcal{M}$ is the MJCF robot/environment model and $\bm{\eta}$
+collects numerical and contact parameters.  The default values include
+\begin{equation}
+  \Delta t=0.01\ \mathrm{s},\qquad
+  \code{o\_solref}=[0.02,1.0],
+\end{equation}
+with pyramidal friction cones in the prediction model.
+
+Equation~\eqref{eq:mujoco_dynamics} includes floating-base multibody
+dynamics, actuator saturation, joint limits, gravity, collision detection,
+normal contact, and friction.  Unlike the SRBD model in the OCS2 note, the
+implementation does not expose contact force as an optimization variable and
+does not explicitly write a centroidal momentum equation.
+
+For each controller update, all $N$ candidates begin from the repeated current
+observation $\hat{\bm{x}}_t$ and are integrated for $H$ steps.  The output
+tensor has shape
+\begin{equation}
+  N\times H\times38,
+\end{equation}
+and is evaluated as $N\times H\times37$ after removing time.
+
+\subsection{Parallel Rollout Execution}
+
+Candidates are divided into chunks and submitted to a thread pool.  Every
+worker owns a thread-local \code{MjData}, while all workers share the immutable
+\code{MjModel}.  The MuJoCo rollout API performs the $H$-step integrations.
+For the default configuration this means
+\begin{equation}
+  N H = 30\times40=1200
+\end{equation}
+contact-dynamics steps per update, distributed over five workers.
+
+\subsection{Contact Treatment}
+
+The controller does not optimize a binary contact mode
+$\sigma_k$, and the gait file does not activate mode-dependent constraints.
+Instead,
+\begin{equation}
+  \text{desired joint gait}
+  \longrightarrow \text{foot motion}
+  \longrightarrow \text{MuJoCo collision/contact response}.
+\end{equation}
+Thus, stance and swing emerge from tracking a periodic joint-space reference
+inside the simulated contact dynamics.  Contact timing can deviate from the
+nominal gait when sampled actions, terrain, or tracking errors change the
+motion.
+
+The prediction and closed-loop simulator normally load separate MJCF files.
+For the default walking task these are \code{go1\_scene\_mppi\_pyr.xml} for
+rollouts and \code{go1\_scene\_mppi.xml} for execution.  They share the same
+Go1 structure and actuator convention, but the prediction variant explicitly
+selects pyramidal contact.  Any further mismatch in geometry, contacts, or
+parameters acts as model error.
+
+%=============================================================================
+\section{Finite-Horizon Stochastic Optimization Problem}
+%=============================================================================
+
+At update time $t$, let
+\begin{equation}
+  \bm{U}=[\bm{u}_0,\ldots,\bm{u}_{H-1}]\in\R^{H\times12}
+\end{equation}
+be the warm-start action sequence.  The controller samples $N$ bounded
+candidate sequences $\bm{U}^{(n)}$ and approximately solves
+\begin{equation}
+  \boxed{
+  \begin{aligned}
+  \min_{\bm{U}}\quad &
+    S(\bm{U};\hat{\bm{x}}_t,\bm{X}^{\mathrm{ref}}_t)
+    =\sum_{k=0}^{H-1}
+      \ell(\bm{x}_{k+1},\bm{u}_k,\bm{x}^{\mathrm{ref}}_k),\\
+  \text{s.t.}\quad &
+    \bm{x}_{k+1}=F_{\mathrm{MJ}}(\bm{x}_k,\bm{u}_k),\\
+  & \bm{x}_0=\hat{\bm{x}}_t,\\
+  & \bm{u}_{\min}\leq\bm{u}_k\leq\bm{u}_{\max}.
+  \end{aligned}}
+  \label{eq:stochastic_ocp}
+\end{equation}
+There is no separately weighted terminal cost in the locomotion
+implementation.  The rollout sum includes all returned states with the same
+stage-cost expression.
+
+This is a sample-based numerical optimization, not a direct transcription of
+the dynamics.  States are never independent decision variables, and dynamics
+or cost Jacobians are not computed.
+
+%=============================================================================
+\section{Reference Generation and Gait Scheduling}
+%=============================================================================
+
+\subsection{Waypoint-Level Body Reference}
+
+For waypoint $g$, the task dictionary defines a desired position, nominal
+orientation, commanded planar velocity, distance threshold, gait name, and
+waiting time.  The controller stores
+\begin{equation}
+  \bm{r}_b^{\mathrm{ref}}=
+  \begin{bmatrix}
+    \bm{p}_g\\
+    \bm{q}_g\\
+    v_{x,g}^{\mathrm{cmd}}\\
+    v_{y,g}^{\mathrm{cmd}}\\
+    0\\0\\0\\0
+  \end{bmatrix}\in\R^{13}.
+\end{equation}
+The final four zeros correspond to desired vertical linear velocity and three
+angular-velocity components.
+
+When the position error exceeds $0.1$ m and the waypoint timer is not in its
+waiting state, $\bm{q}_g$ is recomputed to point toward the goal.  If
+$\bm{d}=\bm{p}_g-\bm{p}_b$, then
+\begin{align}
+  \psi_g &= \operatorname{atan2}(d_y,d_x),\\
+  \theta_g &= -\operatorname{atan2}
+  \left(d_z,\sqrt{d_x^2+d_y^2}\right),\\
+  \bm{q}_g &= \bm{q}_z(\psi_g)\otimes\bm{q}_y(\theta_g).
+\end{align}
+Otherwise, the desired orientation is the identity quaternion.
+
+\subsection{Periodic Joint-Space Gait}
+
+Each gait is loaded from a tab-separated matrix
+\begin{equation}
+  \bm{G}\in\R^{24\times L}.
+\end{equation}
+The first twelve rows are joint-position references and the last twelve rows
+are joint-velocity references:
+\begin{equation}
+  \bm{G}=
+  \begin{bmatrix}
+    \bm{G}_q\\
+    \bm{G}_{\dot q}
+  \end{bmatrix}.
+\end{equation}
+The \code{in\_place} and \code{walk\_fast} files have $L=100$ columns,
+whereas the two medium-speed files used by \code{walk} and \code{trot} have
+$L=74$.  At controller phase $s$, the reference horizon is selected cyclically:
+\begin{equation}
+  \bm{G}_{s,H}=
+  [\bm{G}_{:,s},\bm{G}_{:,s+1},\ldots,
+  \bm{G}_{:,s+H-1}],
+\end{equation}
+where column indices wrap modulo $L$.  After every MPPI update, the index
+array is rolled by one column.
+
+The active scheduler is selected from
+\begin{equation}
+  \{\code{in\_place},\code{walk},\code{walk\_fast},\code{trot}\}
+\end{equation}
+when the waypoint changes.  Each scheduler is a persistent object, so
+reselecting a gait resumes its previously stored phase rather than
+automatically resetting phase zero.
+
+\subsection{Complete State Reference}
+
+For rollout step $k$, the reference used by the cost is
+\begin{equation}
+  \boxed{
+  \bm{x}^{\mathrm{ref}}_k=
+  \begin{bmatrix}
+    \bm{p}_g\\
+    \bm{q}_g\\
+    \bm{G}_{q,s+k}\\
+    v_{x,g}^{\mathrm{cmd}}\\
+    v_{y,g}^{\mathrm{cmd}}\\
+    0\\
+    \bm{0}_3\\
+    \bm{G}_{\dot q,s+k}
+  \end{bmatrix}\in\R^{37}.}
+  \label{eq:state_reference}
+\end{equation}
+Before cost evaluation, the predicted world-frame base linear velocity is
+rotated into the predicted body frame:
+\begin{equation}
+  {}^B\bm{v}_{b,k}=R(\bm{q}_{b,k})^\top{}^W\bm{v}_{b,k}.
+\end{equation}
+Accordingly, the commanded $x$ and $y$ velocities in
+Eq.~\eqref{eq:state_reference} are interpreted in the body frame.  Base
+angular velocity is not transformed by this cost-side operation.
+
+%=============================================================================
+\section{Sampling and MPPI-Style Update}
+%=============================================================================
+
+\subsection{Warm Start}
+
+At initialization the entire horizon is filled with
+\begin{equation}
+\bm{u}_{\mathrm{init}}=
+\bm{1}_2\otimes
+[-0.3,1.34,-2.83,\ 0.3,1.34,-2.83]^\top,
+\end{equation}
+which produces the twelve entries for the four legs.  After an update, the
+new plan is shifted:
+\begin{equation}
+  \bm{u}_{k,t+1}^{\mathrm{nom}}=
+  \begin{cases}
+    \bm{u}_{k+1,t}^{+}, & k=0,\ldots,H-2,\\
+    \bm{u}_{H-1,t}^{+}, & k=H-1.
+  \end{cases}
+  \label{eq:warm_start}
+\end{equation}
+The last optimized action is therefore held at the tail.
+
+\subsection{Cubic Gaussian Sampling}
+
+The default sampler uses $K=4$ knot indices.  For $H=40$, rounded linearly
+spaced indices give
+\begin{equation}
+  \mathcal{K}=\{0,13,26,39\}.
+\end{equation}
+For sample $n$, independent Gaussian knot noise is generated as
+\begin{equation}
+  \bm{\epsilon}_{n,j}\sim
+  \mathcal{N}(\bm{0},\diag(\bm{\sigma}^2)),
+  \qquad j\in\mathcal{K}.
+\end{equation}
+The default walking standard deviation repeats
+\begin{equation}
+  \bm{\sigma}^{\mathrm{leg}}=[0.06,0.1,0.1]^\top
+\end{equation}
+for all four legs.  During a \code{trot} task phase, the controller changes
+this to $[0.06,0.2,0.2]^\top$ per leg.  A cubic spline interpolates the noisy
+knot actions across the full horizon:
+\begin{equation}
+  \tilde{\bm{u}}^{(n)}_k=
+  \operatorname{CubicSpline}
+  \left(\{\bm{u}^{\mathrm{nom}}_j+\bm{\epsilon}_{n,j}\}_{j\in\mathcal{K}}
+  \right)(k).
+\end{equation}
+The actual candidate is clipped componentwise:
+\begin{equation}
+  \bm{u}^{(n)}_k=clip
+  (\tilde{\bm{u}}^{(n)}_k,\bm{u}_{\min},\bm{u}_{\max}).
+\end{equation}
+
+The base class also supports independent normal noise at every time step, but
+all inspected locomotion configurations select cubic sampling.
+
+\subsection{Cost Normalization and Exponential Weights}
+
+Let $S_n$ be the total rollout cost.  The implementation calculates
+\begin{equation}
+  S_{\min}=\min_n S_n,\qquad S_{\max}=\max_n S_n,
+\end{equation}
+then assigns the unnormalized weight
+\begin{equation}
+  \tilde w_n=\exp\left[
+  -\frac{1}{\lambda}
+  \frac{S_n-S_{\min}}{S_{\max}-S_{\min}}
+  \right].
+  \label{eq:weights}
+\end{equation}
+The new plan is the weighted average of the \emph{absolute candidates}:
+\begin{equation}
+  \boxed{
+  \bm{u}^{+}_k=clip\left(
+  \frac{\sum_{n=1}^{N}\tilde w_n\bm{u}^{(n)}_k}
+       {\sum_{n=1}^{N}\tilde w_n+10^{-10}},
+  \bm{u}_{\min},\bm{u}_{\max}\right).}
+  \label{eq:update}
+\end{equation}
+The default temperature is $\lambda=0.1$ in simulation and $0.15$ in the
+walking hardware configuration.
+
+Equation~\eqref{eq:update} is important for interpreting the implementation.
+Canonical MPPI is commonly expressed as a weighted perturbation update
+$\bm{U}^{+}=\bm{U}+\sum_n w_n\bm{E}^{(n)}$, together with a cost/noise
+correction derived from stochastic optimal control.  Here the implementation
+instead uses a min--max normalized ranking and directly averages bounded
+sampled actions.  It is best described as an MPPI-style sampling controller.
+
+%=============================================================================
+\section{Cost Function}
+%=============================================================================
+
+\subsection{Quaternion Error}
+
+For predicted and reference quaternions, the scalar sign-invariant error is
+\begin{equation}
+  d_q(\bm{q},\bm{q}^{\mathrm{ref}})
+  =1-\left|\bm{q}^\top\bm{q}^{\mathrm{ref}}\right|.
+  \label{eq:quat_error}
+\end{equation}
+The implementation writes this same scalar into all four quaternion-error
+slots.  Hence the effective orientation cost is
+\begin{equation}
+  \left(\sum_{j=3}^{6}Q_{jj}\right)d_q^2.
+\end{equation}
+In the default walking configuration, only $Q_{33}=400000$ is nonzero in
+that block, so the orientation contribution is $400000d_q^2$.
+
+\subsection{Position and State Tracking}
+
+The original base-position error is removed from the quadratic state error.
+Position is instead penalized with a weighted $L_1$ term:
+\begin{equation}
+  \ell_p(\bm{x})=
+  Q_{00}|p_x-p_x^{\mathrm{ref}}|
+  +Q_{11}|p_y-p_y^{\mathrm{ref}}|
+  +Q_{22}|p_z-p_z^{\mathrm{ref}}|.
+  \label{eq:position_cost}
+\end{equation}
+Let $\bm{e}_x$ equal $\bm{x}-\bm{x}^{\mathrm{ref}}$, with entries
+$0{:}3$ set to zero and entries $3{:}7$ replaced by the scalar error in
+Eq.~\eqref{eq:quat_error}.  The remaining state cost is
+\begin{equation}
+  \ell_x=\bm{e}_x^\top\bm{Q}\bm{e}_x+\ell_p.
+  \label{eq:state_cost}
+\end{equation}
+Thus $\ell_x$ includes orientation, gait joint-position tracking, body
+velocity tracking, angular-velocity regulation, and gait joint-velocity
+tracking.
+
+For the default walking task, the notable diagonal weights are
+\begin{equation}
+\begin{split}
+  \bm{Q}_p &= \diag(300,300,500),\\
+  Q_{q,\mathrm{ori}} &=400000,\\
+  \bm{Q}_{q_j}&=8000\bm{I}_{12},\\
+  \bm{Q}_{v_b}&=\diag(1,10^{-4},10^{-4}),\\
+  \bm{Q}_{\omega_b}&=10^{-4}\bm{I}_3,\\
+  \bm{Q}_{\dot q_j}&=0.1\bm{I}_{12}.
+\end{split}
+\end{equation}
+These values show that the gait posture and body orientation dominate the
+quadratic reference tracking, while forward-speed error receives a much
+smaller weight.
+
+\subsection{Virtual PD-Effort Cost}
+
+The cost does not penalize desired position $\bm{u}$ directly.  It constructs
+a virtual PD effort
+\begin{equation}
+  \bm{e}_u=50(\bm{u}-\bm{q}_j)-3\dot{\bm{q}}_j
+  \label{eq:virtual_effort}
+\end{equation}
+and applies
+\begin{equation}
+  \ell_u=\bm{e}_u^\top\bm{R}\bm{e}_u,
+  \qquad \bm{R}=10^{-3}\bm{I}_{12}
+\end{equation}
+in the default walking configuration.  This is a proxy for actuator effort.
+It differs slightly from the rollout actuator in Eq.~\eqref{eq:mjcf_pd},
+which uses proportional gain 55 and force saturation.
+
+\subsection{Stage and Rollout Cost}
+
+The stage cost implemented by \code{quadruped\_cost\_np} is
+\begin{equation}
+  \boxed{
+  \ell(\bm{x},\bm{u},\bm{x}^{\mathrm{ref}})
+  =\bm{e}_x^\top\bm{Q}\bm{e}_x
+  +\bm{e}_u^\top\bm{R}\bm{e}_u
+  +\ell_p.}
+  \label{eq:stage_cost}
+\end{equation}
+The rollout cost is the un-discounted sum
+\begin{equation}
+  S_n=\sum_{k=0}^{H-1}
+  \ell(\bm{x}^{(n)}_{k+1},\bm{u}^{(n)}_k,
+       \bm{x}^{\mathrm{ref}}_k).
+  \label{eq:rollout_cost}
+\end{equation}
+No explicit slip, contact-force, friction-cone, foot-clearance, self-collision,
+control-rate, or terminal term appears in this locomotion cost.  Their effects
+are represented only indirectly through dynamics and state/gait tracking.
+
+%=============================================================================
+\section{Waypoint and Task Progression}
+%=============================================================================
+
+Tasks such as \code{walk\_straight}, \code{walk\_octagon}, \code{stairs}, and
+\code{big\_box} define ordered waypoint sequences.  The active waypoint is
+considered geometrically reached when
+\begin{equation}
+  \norm{\bm{p}_g-\bm{p}_b}<r_g,
+\end{equation}
+where the inspected tasks normally use $r_g=0.2$ m.  The simulator and
+hardware loop call \code{next\_goal()} only while this condition holds.
+
+The timer is measured in controller calls rather than seconds.  At the
+nominal 100 Hz rate, 100 timer increments correspond to approximately one
+second.  When the dwell count completes, \code{next\_goal()} updates the goal
+position, planar velocity command, and active gait.  At the last goal it sets
+the task-success flag.
+
+The timer does not enforce continuous residence inside the goal region: if
+the robot leaves the threshold, accumulated elapsed counts are retained until
+the next successful invocation.  This detail matters for interpreting
+\code{waiting\_times} as accumulated in-threshold calls rather than a strict
+continuous dwell interval.
+
+%=============================================================================
+\section{Complete Receding-Horizon Algorithm}
+%=============================================================================
+
+\begin{algorithm}[ht]
+\caption{\code{legged\_mppi} locomotion update}
+\label{alg:legged_mppi}
+\begin{algorithmic}[1]
+  \REQUIRE Current state $\hat{\bm{x}}_t$, previous plan $\bm{U}_t$,
+           active gait and waypoint
+  \STATE Compute the goal direction and update the desired body quaternion.
+  \STATE Read the next $H$ cyclic gait columns to form
+         $\bm{X}^{\mathrm{ref}}_t$.
+  \STATE Add Gaussian noise at four knots, interpolate cubic splines, and
+         clip $N$ candidate action sequences.
+  \STATE Repeat $\hat{\bm{x}}_t$ as the initial state of all candidates.
+  \STATE Roll out all $N$ sequences for $H$ MuJoCo steps in parallel.
+  \STATE Rotate predicted base linear velocities into their local body frames.
+  \STATE Evaluate $S_n$ from position, state, gait, and virtual-effort costs.
+  \STATE Min--max normalize $S_n$ and compute exponential weights.
+  \STATE Compute $\bm{U}_t^+$ as the weighted mean of absolute candidates.
+  \STATE Shift $\bm{U}_t^+$ by one step and hold its tail for warm start.
+  \STATE Advance the gait phase by one column.
+  \RETURN First desired joint-position command $\bm{u}_{0,t}^+$
+\end{algorithmic}
+\end{algorithm}
+
+In simulation the first action is applied for one 10 ms MuJoCo step before the
+process repeats.  In hardware, the first action is published as twelve
+Unitree motor position commands at a nominal 100 Hz ROS loop rate.
+
+%=============================================================================
+\section{Default Configuration Summary}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Parameter & Default walking value\\
+\midrule
+Robot & Unitree Go1, floating base\\
+State / input dimension & $37$ / $12$\\
+Input interpretation & desired joint position\\
+Time step / horizon & $0.01$ s / 40 steps ($0.4$ s)\\
+Samples / workers & 30 / 5\\
+Temperature & $0.1$ simulation; $0.15$ walking hardware\\
+Sampler & cubic spline, four noisy knots\\
+Random seed & 42\\
+Nominal gait lengths & 74 or 100 samples\\
+Contact parameters & \code{o\_solref}$=[0.02,1.0]$\\
+Action limits & Go1 joint-position limits\\
+Initial plan & fixed crouched joint posture\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The YAML files for stairs, large-box traversal, and hardware reuse the same
+basic solver dimensions while changing cost weights, temperature, noise, or
+the environment model.  Task dictionaries additionally select waypoint,
+velocity, gait, and model sequences.
+
+%=============================================================================
+\section{Comparison with OCS2 Legged MPC}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{p{0.22\textwidth}p{0.33\textwidth}p{0.35\textwidth}}
+\toprule
+Aspect & OCS2 legged MPC & \code{legged\_mppi} locomotion\\
+\midrule
+Dynamics & Centroidal/SRBD or full centroidal & Full MuJoCo multibody rollout\\
+State & Centroidal momentum, base pose, joints & MuJoCo floating-base position and velocity state\\
+Optimized input & Contact forces and joint velocities & Desired joint positions\\
+Contact timing & Prescribed mode schedule & Joint-space gait prior plus simulated collision\\
+Contact force & Explicit decision variable & Internal MuJoCo result\\
+Constraints & Mode-dependent equalities, inequalities, barriers & Action clipping, model limits, contact dynamics\\
+Solver & SQP, DDP, or IPM & Sampling and exponential weighted averaging\\
+Derivatives & Analytical/automatic derivatives & Derivative-free rollout scoring\\
+Low-level output & Whole-body controller maps MPC output to torque & Position command sent to simulated or hardware PD servo\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The two controllers therefore place complexity in different layers.  OCS2
+uses an explicit reduced-order OCP and constraint set, followed by a
+whole-body controller.  \code{legged\_mppi} places the full robot, actuator,
+terrain, and contact response inside the rollout and searches directly in
+joint-command space.
+
+%=============================================================================
+\section{Implementation Caveats and Limitations}
+%=============================================================================
+
+\begin{enumerate}
+  \item \textbf{The update differs from canonical MPPI.}
+  Cost is normalized by the current batch range, and absolute candidate
+  actions are averaged.  The temperature therefore controls selection over
+  relative batch cost rather than cost in its original physical units.
+
+  \item \textbf{Equal rollout costs are numerically unsafe.}
+  Equation~\eqref{eq:weights} divides by $S_{\max}-S_{\min}$ without an
+  epsilon.  If every candidate has the same cost, the weights can become
+  non-finite even though the final weight sum contains $10^{-10}$.
+
+  \item \textbf{There is no explicit nominal candidate.}
+  Every candidate receives random knot noise.  Consequently, the current
+  warm-start plan is not guaranteed to be evaluated unchanged.
+
+  \item \textbf{Gait timing is not a contact constraint.}
+  The desired stance/swing behavior can be lost when the joint-space reference
+  is not tracked.  Conversely, very large joint weights can make the
+  controller behave mainly as a gait playback system.
+
+  \item \textbf{The cost omits several locomotion safety quantities.}
+  There is no direct penalty or constraint for foot slip, ground-reaction
+  force, friction margin, support polygon, body collision, or joint torque.
+
+  \item \textbf{Virtual and applied effort differ.}
+  The cost uses $K_p=50$ and no saturation, while the default MuJoCo actuator
+  uses $K_p=55$ and force limits.  Hardware dynamics, latency, and saturation
+  add further mismatch.
+
+  \item \textbf{Prediction and execution models can differ.}
+  Separate MJCF paths are loaded for the controller and simulator.  Contact
+  geometry and solver settings should be audited together for each task.
+
+  \item \textbf{Velocity-frame consistency requires validation.}
+  The rollout cost explicitly converts world linear velocity into a body
+  frame.  The hardware callback also transforms odometry velocity, but its use
+  of the forward rotation should be checked against the frame convention of
+  each odometry source.
+
+  \item \textbf{Real-time performance is not guaranteed by the nominal rate.}
+  A 100 Hz loop provides only 10 ms per update.  The wall-clock time for 1200
+  contact steps, allocation, interpolation, and cost calculation must be
+  measured on the target CPU.
+\end{enumerate}
+
+%=============================================================================
+\section{Recommended Validation}
+%=============================================================================
+
+The following measurements connect the formulation to actual closed-loop
+behavior:
+\begin{enumerate}
+  \item mean, 95th, and 99th percentile MPPI update time and 10 ms deadline
+        miss rate,
+  \item distribution of $S_{\max}-S_{\min}$, effective sample size, and the
+        fraction of non-finite weights,
+  \item base position, height, quaternion error, and body-frame velocity error,
+  \item joint/gait tracking error, actuator saturation rate, and measured
+        effort,
+  \item foot contact sequence, ground-reaction force, slip velocity, and body
+        collision events,
+  \item one-step prediction error between the rollout model and simulator or
+        hardware observation, and
+  \item waypoint residence time, transition count, and task-completion rate.
+\end{enumerate}
+
+Useful ablations include normal versus cubic noise, the current absolute-action
+average versus a perturbation update, inclusion of a noise-free candidate,
+removal of min--max normalization, varying the gait-state weights, and using
+identical versus deliberately mismatched prediction/execution contact models.
+
+%=============================================================================
+\section{Pipeline Summary}
+%=============================================================================
+
+\begin{equation*}
+\boxed{
+\begin{array}{c}
+\text{Current Go1 state }\hat{\bm{x}}_t\\
+\downarrow\\
+\text{Waypoint body target + phase-aligned joint gait}\\
+\downarrow\\
+\text{Warm-start desired joint-position sequence}\\
+\downarrow\\
+\text{Cubic Gaussian sampling }(30\times40\times12)\\
+\downarrow\\
+\text{Parallel full-dynamics MuJoCo rollouts}\\
+\downarrow\\
+\text{Body/gait tracking + virtual PD-effort cost}\\
+\downarrow\\
+\text{Min--max normalization + exponential weighting}\\
+\downarrow\\
+\text{Execute the first desired joint-position action}\\
+\downarrow\\
+\text{Shift the plan and advance the gait phase}
+\end{array}}
+\end{equation*}
+
+The defining design choice is to optimize desired joint-position trajectories
+through full MuJoCo contact dynamics.  A periodic gait supplies a strong
+motion prior, while sampling searches locally for whole-body actions that
+reduce pose, velocity, gait, and virtual-effort cost in receding-horizon
+feedback.
+
+\end{document}

@@ -1,9 +1,9 @@
-PWD /home/tony/leg_mppi_ws/RTWholeBodyMPPI
+PWD /home/tony/leg_mppi_ws/RTWholeBodyMPPI/tex/ocs2
 INPUT /etc/texmf/web2c/texmf.cnf
 INPUT /usr/share/texmf/web2c/texmf.cnf
 INPUT /usr/share/texlive/texmf-dist/web2c/texmf.cnf
 INPUT /var/lib/texmf/web2c/pdftex/pdflatex.fmt
-INPUT /home/tony/leg_mppi_ws/RTWholeBodyMPPI/temp_1784512933070.844886530.tex
+INPUT /home/tony/leg_mppi_ws/RTWholeBodyMPPI/tex/ocs2/temp_1784512933070.844886530.tex
 OUTPUT temp_1784512933070.844886530.log
 INPUT /usr/share/texlive/texmf-dist/tex/latex/base/article.cls
 INPUT /usr/share/texlive/texmf-dist/tex/latex/base/article.cls

@@ -1,0 +1,33 @@
+\contentsline {section}{\numberline {1}Scope and Executive Summary}{3}{section.1}%
+\contentsline {section}{\numberline {2}Robot Model, State, and Input}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Degrees of Freedom}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Observation State}{4}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Control Input and Actuator Model}{4}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Prediction Dynamics and Contact}{5}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Discrete MuJoCo Dynamics}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Consistency Between Prediction and Simulation}{5}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Implicit Contact Scheduling}{5}{subsection.3.3}%
+\contentsline {section}{\numberline {4}Finite-Horizon Stochastic Optimal Control Problem}{5}{section.4}%
+\contentsline {section}{\numberline {5}Nominal Trajectory Construction}{6}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Leg Gait Reference}{6}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Arm IK Reference}{6}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Whole-Body Joint Reference and Residual Warm Start}{6}{subsection.5.3}%
+\contentsline {section}{\numberline {6}Sampling and MPPI Update}{7}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Cubic Noise Sampling}{7}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Cost Normalization and Weights}{7}{subsection.6.2}%
+\contentsline {section}{\numberline {7}Cost Function}{7}{section.7}%
+\contentsline {subsection}{\numberline {7.1}State Reference}{7}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Body and Joint State Cost}{8}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Virtual PD Effort Cost}{8}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}End-Effector Pose Cost}{8}{subsection.7.4}%
+\contentsline {subsection}{\numberline {7.5}Total Stage and Rollout Cost}{9}{subsection.7.5}%
+\contentsline {section}{\numberline {8}Arm--Torso Collision Model}{9}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Geometry}{9}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Soft Cost and Hard Rejection}{9}{subsection.8.2}%
+\contentsline {section}{\numberline {9}End-Effector Waypoints and Task Progression}{9}{section.9}%
+\contentsline {section}{\numberline {10}Complete Receding-Horizon Algorithm}{10}{section.10}%
+\contentsline {section}{\numberline {11}Default Configuration Summary}{11}{section.11}%
+\contentsline {section}{\numberline {12}Comparison with OCS2 Legged MPC}{11}{section.12}%
+\contentsline {section}{\numberline {13}Implementation Caveats and Limitations}{11}{section.13}%
+\contentsline {section}{\numberline {14}Recommended Validation}{12}{section.14}%
+\contentsline {section}{\numberline {15}Pipeline Summary}{13}{section.15}%
