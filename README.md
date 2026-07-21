@@ -133,6 +133,7 @@ The following tasks can be simulated:
 - `walk_octagon`
 - `big_box`
 - `stairs`
+- `push_box`
 
 ### Example Usage
 Run a simulation for the `stairs` task:
@@ -145,6 +146,12 @@ If you are using the docker container:
 ```bash
 rosrun legged_mppi simulate_mppi.py --task stairs
 ``` 
+
+Run the MuJoCo box-pushing task:
+
+```bash
+python simulate_mppi.py --task push_box
+```
 ---
 ## Hardware
 ### Locomotion tasks

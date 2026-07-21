@@ -58,9 +58,21 @@ class Simulator:
         self.save_dir = save_dir
         # rollout
         mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos = self.model.key_qpos[1]
-        self.data.qvel = self.model.key_qvel[1]
-        self.data.ctrl = self.model.key_ctrl[1]
+        if self.model.nkey:
+            # Locomotion scenes provide ``sit`` while the push-box scene has
+            # only ``home``. Prefer the former to preserve existing task
+            # initialization and fall back safely for locomanipulation.
+            keyframe_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_KEY, "sit"
+            )
+            if keyframe_id < 0:
+                keyframe_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_KEY, "home"
+                )
+            if keyframe_id < 0:
+                keyframe_id = 0
+            mujoco.mj_resetDataKeyframe(self.model, self.data, keyframe_id)
+        mujoco.mj_forward(self.model, self.data)
 
         # viewer
         if viewer:
@@ -89,7 +101,8 @@ class Simulator:
         self.qvel[:, t] = self.data.qvel
         self.ctrl[:, t] = self.data.ctrl
         self.time[t] = self.data.time
-        self.cost[0, t] = self.agent.eval_best_trajectory()
+        cost = self.agent.eval_best_trajectory()
+        self.cost[0, t] = np.nan if cost is None else cost
         return None
     
     def state_difference(self, pos1, pos2):
@@ -138,9 +151,18 @@ class Simulator:
 
             mujoco.mj_step(self.model, self.data)
             
-            error = np.linalg.norm(np.array(self.agent.body_ref[:3]) - np.array(self.data.qpos[:3]))
-            if error < self.agent.goal_thresh[self.agent.goal_index]:
-                self.agent.next_goal()
+            observation = np.concatenate([self.data.qpos, self.data.qvel], axis=0)
+            if hasattr(self.agent, "advance_task"):
+                # Locomanipulation models place the free box before the robot
+                # in qpos and own their phase/box-distance transition logic.
+                self.agent.advance_task(observation)
+            else:
+                error = np.linalg.norm(
+                    np.array(self.agent.body_ref[:3])
+                    - np.array(self.data.qpos[:3])
+                )
+                if error < self.agent.goal_thresh[self.agent.goal_index]:
+                    self.agent.next_goal()
 
             if self.viewer is not None and self.viewer.is_alive:
                 self.viewer.add_marker(
@@ -150,6 +172,14 @@ class Simulator:
                     type=mujoco.mjtGeom.mjGEOM_SPHERE, # Specify that this is a sphere
                     label=""
                 )
+                if hasattr(self.agent, "x_box_ref"):
+                    self.viewer.add_marker(
+                        pos=self.agent.x_box_ref[:3],
+                        size=[0.12, 0.12, 0.12],
+                        rgba=[0.1, 1.0, 0.1, 0.7],
+                        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                        label="box goal",
+                    )
                             
                 self.viewer.render()
                 if self.save_frames:
@@ -178,12 +208,22 @@ class Simulator:
         analysis_path = os.path.join(base_folfer, trajectory_name)
                                                                                                                                                
         np.savetxt(analysis_path, self.cost, delimiter='\t')
+        # The push-box model stores [box free joint, robot free joint, robot
+        # joints] in qpos. Other locomotion models start directly with the
+        # robot free joint.
+        push_box_layout = hasattr(self.agent, "x_box_ref")
+        robot_qpos_adr = 7 if push_box_layout else 0
+
         # position
         plt.figure()
         
-        plt.plot(self.time, self.qpos[0, :], label="x (sim)", ls="--", color="blue")
-        plt.plot(self.time, self.qpos[1, :], label="y (sim)", ls="--", color="orange")
-        plt.plot(self.time, self.qpos[2, :], label="z (sim)", ls="--", color="magenta")
+        plt.plot(self.time, self.qpos[robot_qpos_adr, :], label="robot x", ls="--", color="blue")
+        plt.plot(self.time, self.qpos[robot_qpos_adr + 1, :], label="robot y", ls="--", color="orange")
+        plt.plot(self.time, self.qpos[robot_qpos_adr + 2, :], label="robot z", ls="--", color="magenta")
+        if push_box_layout:
+            plt.plot(self.time, self.qpos[0, :], label="box x", color="green")
+            plt.plot(self.time, self.qpos[1, :], label="box y", color="red")
+            plt.plot(self.time, self.qpos[2, :], label="box z", color="black")
 
         plt.legend()
         plt.xlabel("Time (s)")
@@ -192,10 +232,10 @@ class Simulator:
         # orientation plot
         fig = plt.figure()
 
-        plt.plot(self.time, self.qpos[3, :], label="q0 (sim)", ls="--", color="blue")
-        plt.plot(self.time, self.qpos[4, :], label="q1 (sim)", ls="--", color="orange")
-        plt.plot(self.time, self.qpos[5, :], label="q2 (sim)", ls="--", color="magenta")
-        plt.plot(self.time, self.qpos[6, :], label="q3 (sim)", ls="--", color="green")
+        plt.plot(self.time, self.qpos[robot_qpos_adr + 3, :], label="q0 (sim)", ls="--", color="blue")
+        plt.plot(self.time, self.qpos[robot_qpos_adr + 4, :], label="q1 (sim)", ls="--", color="orange")
+        plt.plot(self.time, self.qpos[robot_qpos_adr + 5, :], label="q2 (sim)", ls="--", color="magenta")
+        plt.plot(self.time, self.qpos[robot_qpos_adr + 6, :], label="q3 (sim)", ls="--", color="green")
 
         plt.legend()
         plt.xlabel("Time (s)")
@@ -255,6 +295,3 @@ if __name__ == "__main__":
     simulator = Simulator(T = 300, dt=0.002, viewer=True, gravity=True, model_path=model_path)
     simulator.run()
     simulator.plot_trajectory()
-
-
-

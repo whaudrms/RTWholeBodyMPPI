@@ -28,7 +28,7 @@ class MPPI_box_push(BaseMPPI):
         - MPPI sampling and cost calculation configurations.
     """
 
-    def __init__(self, task='box_push') -> None:
+    def __init__(self, task='push_box') -> None:
         """
         Initialize the MPPI controller with task-specific configurations.
 
@@ -69,6 +69,7 @@ class MPPI_box_push(BaseMPPI):
         
         # Set initial parameters and state
         self.obs = None
+        self.cached_best_cost = None
         self.internal_ref = True
         self.exp_weights = np.ones(self.n_samples) / self.n_samples  # Initial MPPI weights
 
@@ -113,10 +114,10 @@ class MPPI_box_push(BaseMPPI):
         elif self.follow_box:
             self.prev_body_ref = self.body_ref[:2]*1
             self.body_ref[:2] = self.box_state[:2]
-            print("still working...")
             if np.linalg.norm(np.array(self.box_state[:2])-np.array(self.x_box_ref[:2])) < 0.3:
                 print("Task succeed. Time to back up!")
                 self.follow_box = False
+                self.task_success = True
                 self.goal_index = (self.goal_index + 1)
                 # Change Q box to 0
                 self.Q_box = np.diag(np.zeros(3))
@@ -125,6 +126,24 @@ class MPPI_box_push(BaseMPPI):
                 self.gait_scheduler = self.gaits['in_place']
         else:
             pass
+
+    def advance_task(self, observation):
+        """Advance the push-box state machine from a MuJoCo observation.
+
+        The push-box model stores the free box before the robot in qpos, so
+        the generic simulator cannot use its usual robot-position threshold.
+        This hook keeps the box pose current and lets ``next_goal`` apply the
+        controller's original phase- and box-distance transitions.
+        """
+        observation = np.asarray(observation, dtype=float)
+        expected = self.model.nq + self.model.nv
+        if observation.shape != (expected,):
+            raise ValueError(
+                f"Expected push-box observation shape {(expected,)}, "
+                f"got {observation.shape}"
+            )
+        self.box_state[:7] = observation[:7]
+        self.next_goal()
         
     def update(self, obs):
         """
@@ -165,6 +184,7 @@ class MPPI_box_push(BaseMPPI):
                                    self.state_rollouts[:,:,np.r_[1:8, 27:33]],\
                                    actions, 
                                    self.joints_ref, self.body_ref)
+        self.cached_best_cost = float(np.min(costs_sum))
 
         # Update the gait scheduler
         self.gait_scheduler.roll()
@@ -172,7 +192,10 @@ class MPPI_box_push(BaseMPPI):
         # Calculate MPPI weights for the samples
         min_cost = np.min(costs_sum)
         max_cost = np.max(costs_sum)
-        self.exp_weights = np.exp(-1 / self.temperature * ((costs_sum - min_cost) / (max_cost - min_cost)))
+        cost_range = max(max_cost - min_cost, np.finfo(float).eps)
+        self.exp_weights = np.exp(
+            -1 / self.temperature * ((costs_sum - min_cost) / cost_range)
+        )
 
         # Weighted average of action deltas
         weighted_delta_u = self.exp_weights.reshape(self.n_samples, 1, 1) * actions
@@ -257,22 +280,8 @@ class MPPI_box_push(BaseMPPI):
         return total_costs
     
     def eval_best_trajectory(self):
-        """
-        Evaluate the cost of the best trajectory selected by MPPI.
-
-        Returns:
-            float: Cost of the best trajectory, or None if no observation is available.
-        """
-        if self.obs is None:
-            # If no observation is available, return None
-            return None
-        else:
-            # Create a rollout array for the best trajectory
-            best_rollouts = np.zeros((1, self.horizon, mujoco.mj_stateSize(self.model, mujoco.mjtState.mjSTATE_FULLPHYSICS.value)))
-            # Perform rollout for the best trajectory
-            self.rollout_func(best_rollouts, np.array([self.selected_trajectory]), np.repeat(np.array([np.concatenate([[0],self.obs])]), 1, axis=0), num_workers=self.num_workers, nstep=self.horizon)
-        # Compute and return the cost of the best trajectory
-        return (self.cost_func(best_rollouts[:,:,1:], np.array([self.selected_trajectory]), self.joints_ref, self.body_ref))[0]
+        """Return the best cost cached by the latest MPPI update."""
+        return self.cached_best_cost
 
     def __del__(self):
         self.shutdown()
