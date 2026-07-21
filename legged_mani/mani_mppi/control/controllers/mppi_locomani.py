@@ -820,7 +820,7 @@ class MPPI(BaseMPPI):
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
         v_ref = x_ref[:, 29:45]
-        u_error = kp * (u - x_joint) - kd * (v_joint - v_ref)
+        u_error = kp * (u - x_joint) - kd * (v_joint)
 
         # Q slots 0:7 represent [base_x, base_y, base_z, roll, pitch, yaw, unused].
         # Keep base x/y active when configured so an in-place gait cannot

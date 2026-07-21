@@ -383,7 +383,7 @@ class MPPI(BaseMPPI):
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
         uv = x_ref[:, 29:45]
-        u_error = kp * (u - x_joint) - kd * (v_joint - uv)
+        u_error = kp * (u - x_joint) - kd * (v_joint)
 
         # Compute positional cost (L1 norm for positional error)
         x_error[:, :3] = 0  # Ignore positional error for simplicity
