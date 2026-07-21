@@ -196,18 +196,27 @@ class Simulator:
                 self.viewer.add_marker(
                     pos=self.agent.body_ref[:3]*1,         # Position of the marker
                     size=[0.15, 0.15, 0.15],     # Size of the sphere
-                    rgba=[1, 0, 1, 1],           # Color of the sphere (red)
+                    rgba=[1, 0, 1, 1],           # Magenta body-reference marker
                     type=mujoco.mjtGeom.mjGEOM_SPHERE, # Specify that this is a sphere
                     label=""
                 )
 
-                # Show the current manipulator end-effector goal for locomani.
+                # Show the current manipulator end-effector goal.
                 if hasattr(self.agent, "ee_goal_pos"):
                     ee_goal = self.agent.ee_goal_pos[self.agent.goal_index]
                     self.viewer.add_marker(
                         pos=ee_goal,
                         size=[0.05, 0.05, 0.05],
                         rgba=[1, 0.2, 0.1, 1],
+                        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                    )
+
+                # Show the desired box position for push-box tasks.
+                if hasattr(self.agent, "x_box_ref"):
+                    self.viewer.add_marker(
+                        pos=self.agent.x_box_ref[:3],
+                        size=[0.08, 0.08, 0.08],
+                        rgba=[1.0, 1.0, 0.0, 1.0],
                         type=mujoco.mjtGeom.mjGEOM_SPHERE,
                     )
                             

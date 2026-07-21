@@ -118,6 +118,28 @@ TASKS = {
         "config_path": "configs/mppi_locomani.yml",
         "sim_path": DEFAULT_SIM_PATH,
     },
+    "push_box": {
+        # Nominal references for approach, contact, push, and hold. The
+        # controller recomputes the actual body/EE reference from the moving
+        # box, so these values document the initial and final staging poses.
+        "goal_pos": [[2.0, -0.78, STAND_BASE_HEIGHT],
+                     [2.0, -0.78, STAND_BASE_HEIGHT],
+                     [2.0, 0.22, STAND_BASE_HEIGHT],
+                     [2.0, 0.22, STAND_BASE_HEIGHT]],
+        "default_orientation": [[0.70710678, 0.0, 0.0, 0.70710678]] * 4,
+        "cmd_vel": [[0.25, 0.0],
+                    [0.0, 0.0],
+                    [0.15, 0.0],
+                    [0.0, 0.0]],
+        "goal_thresh": [0.20, 0.08, 0.30, 0.0],
+        "desired_gait": ['walk_fast', 'in_place', 'walk', 'in_place'],
+        "waiting_times": [0, 0, 0, 0],
+        "box_pos_ref": [3.0, 2.0, 0.19],
+
+        "model_path": 'models/b2_z1_base_push_box.xml',
+        "config_path": 'configs/mppi_push_box.yml',
+        "sim_path": 'models/scene_push_box.xml'
+    },
 }
 
 def get_task(task_name):

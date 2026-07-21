@@ -32,12 +32,16 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
     sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
-    if task == "locomani":
+    if task in {"locomani", "push_box"}:
         if rollout_mode is not None:
             raise ValueError(
                 "--rollout-mode is currently available for locomotion tasks only"
             )
+    if task == "locomani":
         from mani_mppi.control.controllers.mppi_locomani import MPPI
+        agent = MPPI(task=task)
+    elif task == "push_box":
+        from mani_mppi.control.controllers.mppi_push_box import MPPI
         agent = MPPI(task=task)
     else:
         from mani_mppi.control.controllers.mppi_locomotion import MPPI
@@ -56,7 +60,7 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
 
 if __name__ == "__main__":
     # Define valid tasks
-    VALID_TASKS = ['stand', 'walk_straight', 'big_box', 'locomani']
+    VALID_TASKS = ['stand', 'walk_straight', 'big_box', 'locomani', 'push_box']
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run simulation with a specified task.")
