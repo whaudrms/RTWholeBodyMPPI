@@ -25,7 +25,7 @@ default_gait: "in_place"
 # Arm IK parameters used to generate the nominal arm-joint reference.
 arm_ik_damping: 0.05
 arm_ik_step_size: 0.7
-arm_ik_max_iterations: 100
+arm_ik_max_iterations: 5
 arm_ik_tolerance: 0.0001
 arm_ik_smoothing: 0.3
 arm_ik_max_step: 0.04
@@ -180,6 +180,10 @@ R_diag:
 # Arm-to-torso collision model. Four FK points define three capsule
 collision_enabled: true
 collision_body_geom: "base_collision"
+# Disable only physical arm/base contacts in the controller's rollout model.
+# Arm/box contact remains active so sampled trajectories can still push.
+disable_arm_torso_rollout_contact: true
+rollout_arm_root_body: "link00"
 collision_capsule_radii: [0.030, 0.030, 0.0375]
 collision_shoulder_exclusion: 0.07
 collision_safe_distance: 0.10
