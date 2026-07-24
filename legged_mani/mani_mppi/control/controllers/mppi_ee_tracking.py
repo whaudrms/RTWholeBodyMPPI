@@ -7,22 +7,15 @@ import numpy as np
 import yaml
 
 from mani_mppi.control.controllers.whole_body_arm_controller import (
-    HEIGHT_GAIT_PATHS,
+    GAIT_PATHS,
     WholeBodyArmMPPI,
 )
-from mani_mppi.control.gait_scheduler.height_conditioned_scheduler import (
-    HeightConditionedGaitScheduler,
-)
-from mani_mppi.control.gait_scheduler.scheduler import Timer
+from mani_mppi.control.gait_scheduler.scheduler import GaitScheduler, Timer
 from mani_mppi.utils.tasks import get_task
 from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APPROACH = "approach"
-LOWER = "lower"
-TRACK = "track"
-RECOVER = "recover"
 
 
 class MPPI(WholeBodyArmMPPI):
@@ -78,67 +71,6 @@ class MPPI(WholeBodyArmMPPI):
         if self.gait_startup_blend_steps < 0:
             raise ValueError("gait_startup_blend_steps must be non-negative")
 
-        # Reachability-aware base motion and height-conditioned gait settings.
-        self.adaptive_gait_enabled = bool(
-            params.get("adaptive_gait_enabled", True)
-        )
-        self.stand_base_height = float(
-            params.get("stand_base_height", 0.543542)
-        )
-        self.min_base_height = float(params.get("min_base_height", 0.35))
-        self.base_height_rate = float(params.get("base_height_rate", 0.10))
-        self.base_height_tolerance = float(
-            params.get("base_height_tolerance", 0.015)
-        )
-        self.base_xy_tolerance = float(
-            params.get("base_xy_tolerance", 0.05)
-        )
-        self.approach_speed = float(params.get("approach_speed", 0.15))
-        self.reachability_residual_threshold = float(
-            params.get("reachability_residual_threshold", self.ee_pos_thresh)
-        )
-        self.reachability_height_candidates = np.asarray(
-            params.get(
-                "reachability_height_candidates",
-                [0.543542, 0.50, 0.45, 0.40, 0.35],
-            ),
-            dtype=float,
-        )
-        self.reachability_xy_step = float(
-            params.get("reachability_xy_step", 0.05)
-        )
-        self.reachability_max_xy_shift = float(
-            params.get("reachability_max_xy_shift", 0.40)
-        )
-        self.reachability_ik_iterations = int(
-            params.get("reachability_ik_iterations", 100)
-        )
-        self.approach_gait = params.get("approach_gait", "walk_fast")
-        self.tracking_gait = params.get("tracking_gait", "stance_hold")
-        if self.approach_gait not in HEIGHT_GAIT_PATHS:
-            raise ValueError(f"Unknown approach gait: {self.approach_gait}")
-        if self.tracking_gait not in HEIGHT_GAIT_PATHS:
-            raise ValueError(f"Unknown tracking gait: {self.tracking_gait}")
-        if (
-            not 0.0 < self.min_base_height <= self.stand_base_height
-            or self.base_height_rate <= 0.0
-            or self.base_height_tolerance <= 0.0
-            or self.base_xy_tolerance <= 0.0
-            or self.approach_speed <= 0.0
-        ):
-            raise ValueError("Invalid adaptive base-height configuration")
-        if (
-            self.reachability_height_candidates.ndim != 1
-            or not len(self.reachability_height_candidates)
-            or not np.isfinite(self.reachability_height_candidates).all()
-        ):
-            raise ValueError("reachability_height_candidates must be finite")
-        self.reachability_height_candidates = np.unique(np.clip(
-            self.reachability_height_candidates,
-            self.min_base_height,
-            self.stand_base_height,
-        ))[::-1]
-
         # Shared arm IK/FK, rollout sensors, and capsule-to-torso collision.
         self._configure_arm_system(params, self.ee_site_name)
 
@@ -153,21 +85,13 @@ class MPPI(WholeBodyArmMPPI):
         self.body_ref = np.zeros(13, dtype=float)
         self.body_ref[:7] = self.model.key_qpos[body_key_id][:7]
 
-        # Initialize phase-compatible gait banks for walking and crouching.
-        self.height_gaits = {
-            name: HeightConditionedGaitScheduler(paths, name=name)
-            for name, paths in HEIGHT_GAIT_PATHS.items()
-        }
-        self.default_gait = params.get("default_gait", self.tracking_gait)
-        if self.default_gait not in self.height_gaits:
+        # Initialize the gait reference used for the leg joints.
+        self.default_gait = params.get("default_gait", "walk_fast")
+        if self.default_gait not in GAIT_PATHS:
             raise ValueError(f"Unknown default gait: {self.default_gait}")
-        self.gait_scheduler = self.height_gaits[self.default_gait]
-        self.base_height_cmd = self.stand_base_height
-        self.base_height_rate_cmd = 0.0
-        self.motion_phase = TRACK
-        self.planned_base_xy = self.body_ref[:2].copy()
-        self.planned_base_height = self.stand_base_height
-        self._planned_goal_index = -1
+        self.gait_scheduler = GaitScheduler(
+            gait_path=GAIT_PATHS[self.default_gait], name=self.default_gait
+        )
 
         # Compute the initial arm posture that reaches the first EE goal.
         self.arm_reference = self._solve_arm_ik(
@@ -177,7 +101,7 @@ class MPPI(WholeBodyArmMPPI):
             step_size=self.arm_ik_step_size,
             max_iterations=self.arm_ik_max_iterations,
             tolerance=self.arm_ik_tolerance,
-            strict=False,
+            strict=True,
         )
 
         self.internal_ref = True
@@ -202,215 +126,6 @@ class MPPI(WholeBodyArmMPPI):
         print(f"Initial EE goal: {self.ee_goal_pos[0]}")
         print(f"IK arm reference: {np.round(self.arm_reference, 4)}")
 
-    def _set_gait(self, gait_name):
-        """Switch gait banks without resetting the shared phase."""
-        if gait_name == self.default_gait:
-            return
-        transition_source = self.trajectory.copy()
-        old_phase = self.gait_scheduler.phase_time
-        scheduler = self.height_gaits[gait_name]
-        scheduler.phase_time = old_phase % scheduler.phase_length
-        scheduler.indices = (
-            scheduler.phase_time + np.arange(scheduler.phase_length)
-        ) % scheduler.phase_length
-        self.gait_scheduler = scheduler
-        self.default_gait = gait_name
-        self.set_noise_for_gait(gait_name)
-        if self.nominal_from_gait:
-            self._reset_gait_nominal(transition_source)
-            self.last_safe_trajectory = self.trajectory.copy()
-
-    def _set_motion_phase(self, phase):
-        if phase == self.motion_phase:
-            return
-        self.motion_phase = phase
-        gait_name = self.approach_gait if phase == APPROACH else self.tracking_gait
-        self._set_gait(gait_name)
-        print(
-            f"Locomani phase: {phase}, gait={gait_name}, "
-            f"height={self.base_height_cmd:.3f}"
-        )
-
-    def _planner_candidate(self, observation, target, base_xy, base_height):
-        """Evaluate arm reachability and torso clearance at one base pose."""
-        qpos = np.asarray(observation[:self.model.nq], dtype=float).copy()
-        qpos[:2] = base_xy
-        qpos[2] = base_height
-        qpos[3:7] = np.array([1.0, 0.0, 0.0, 0.0])
-        arm_q = self._solve_arm_ik(
-            target,
-            qpos,
-            damping=self.arm_ik_damping,
-            step_size=self.arm_ik_step_size,
-            max_iterations=self.reachability_ik_iterations,
-            tolerance=self.arm_ik_tolerance,
-            strict=False,
-        )
-        residual = float(self.last_ik_residual)
-        qpos[self.arm_qpos_indices] = arm_q
-        state = np.concatenate((qpos, np.zeros(self.model.nv)))[None, :]
-        arm_positions, _ = self._batch_arm_fk(state)
-        _, valid = self._arm_torso_clearance(state, arm_positions)
-        return residual, bool(np.all(valid))
-
-    def _plan_base_reference(self, observation):
-        """Choose the highest reachable base pose along the EE approach line."""
-        target = self.ee_goal_pos[self.goal_index]
-        current_xy = np.asarray(observation[:2], dtype=float)
-        direction = target[:2] - current_xy
-        norm = np.linalg.norm(direction)
-        if norm > 1e-9:
-            direction /= norm
-        else:
-            # The Z1 workspace is predominantly in front of the base (+x).
-            # If the target is directly above/below the base, move the base
-            # backwards so the target enters that forward workspace.
-            direction = np.array([-1.0, 0.0])
-        shifts = np.arange(
-            0.0,
-            self.reachability_max_xy_shift + 0.5 * self.reachability_xy_step,
-            self.reachability_xy_step,
-        )
-
-        best = None
-        best_score = np.inf
-        for height in self.reachability_height_candidates:
-            for shift in shifts:
-                candidate_xy = current_xy + shift * direction
-                residual, collision_valid = self._planner_candidate(
-                    observation, target, candidate_xy, float(height)
-                )
-                score = residual + (0.0 if collision_valid else 10.0)
-                if score < best_score:
-                    best_score = score
-                    best = (candidate_xy.copy(), float(height), residual)
-                if (
-                    collision_valid
-                    and residual <= self.reachability_residual_threshold
-                ):
-                    print(
-                        "Reachability plan: "
-                        f"base_xy={np.round(candidate_xy, 3)}, "
-                        f"height={height:.3f}, residual={residual:.4f}"
-                    )
-                    return candidate_xy, float(height)
-
-        if best is None:
-            raise RuntimeError("Reachability planner produced no candidates")
-        print(
-            "Reachability fallback: "
-            f"base_xy={np.round(best[0], 3)}, height={best[1]:.3f}, "
-            f"residual={best[2]:.4f}"
-        )
-        return best[0], best[1]
-
-    def _activate_plan(self, observation):
-        self.planned_base_xy, self.planned_base_height = (
-            self._plan_base_reference(observation)
-        )
-        self._planned_goal_index = self.goal_index
-        xy_error = np.linalg.norm(
-            self.planned_base_xy - np.asarray(observation[:2])
-        )
-        if (
-            self.base_height_cmd < self.stand_base_height
-            - self.base_height_tolerance
-            and (
-                xy_error > self.base_xy_tolerance
-                or self.planned_base_height > self.base_height_cmd
-                + self.base_height_tolerance
-            )
-        ):
-            self._set_motion_phase(RECOVER)
-        elif xy_error > self.base_xy_tolerance:
-            self._set_motion_phase(APPROACH)
-        elif (
-            self.planned_base_height
-            < self.base_height_cmd - self.base_height_tolerance
-        ):
-            self._set_motion_phase(LOWER)
-        else:
-            self.base_height_cmd = self.planned_base_height
-            self._set_motion_phase(TRACK)
-
-    def _ramp_height(self, target_height):
-        dt = float(self.model.opt.timestep)
-        delta = np.clip(
-            target_height - self.base_height_cmd,
-            -self.base_height_rate * dt,
-            self.base_height_rate * dt,
-        )
-        self.base_height_cmd += delta
-        self.base_height_rate_cmd = delta / dt
-
-    def _update_motion_reference(self, observation):
-        if (
-            self.adaptive_gait_enabled
-            and self._planned_goal_index != self.goal_index
-        ):
-            self._activate_plan(observation)
-
-        current_xy = np.asarray(observation[:2], dtype=float)
-        if self.motion_phase == RECOVER:
-            self.body_ref[:2] = current_xy
-            self._ramp_height(self.stand_base_height)
-            if (
-                abs(observation[2] - self.stand_base_height)
-                <= self.base_height_tolerance
-                and abs(self.base_height_cmd - self.stand_base_height)
-                <= 1e-9
-            ):
-                xy_error = np.linalg.norm(self.planned_base_xy - current_xy)
-                if xy_error > self.base_xy_tolerance:
-                    self._set_motion_phase(APPROACH)
-                elif (
-                    self.planned_base_height
-                    < self.stand_base_height - self.base_height_tolerance
-                ):
-                    self._set_motion_phase(LOWER)
-                else:
-                    self._set_motion_phase(TRACK)
-        elif self.motion_phase == APPROACH:
-            self.base_height_cmd = self.stand_base_height
-            self.base_height_rate_cmd = 0.0
-            self.body_ref[:2] = self.planned_base_xy
-            if (
-                np.linalg.norm(self.planned_base_xy - current_xy)
-                <= self.base_xy_tolerance
-            ):
-                if (
-                    self.planned_base_height
-                    < self.stand_base_height - self.base_height_tolerance
-                ):
-                    self._set_motion_phase(LOWER)
-                else:
-                    self._set_motion_phase(TRACK)
-        elif self.motion_phase == LOWER:
-            self.body_ref[:2] = self.planned_base_xy
-            self._ramp_height(self.planned_base_height)
-            if (
-                abs(observation[2] - self.planned_base_height)
-                <= self.base_height_tolerance
-                and abs(self.base_height_cmd - self.planned_base_height)
-                <= 1e-9
-            ):
-                self._set_motion_phase(TRACK)
-        else:
-            self.body_ref[:2] = self.planned_base_xy
-            self.base_height_cmd = self.planned_base_height
-            self.base_height_rate_cmd = 0.0
-
-        self.body_ref[2] = self.base_height_cmd
-        self.body_ref[3:7] = np.array([1.0, 0.0, 0.0, 0.0])
-        self.body_ref[7:13] = 0.0
-        if self.motion_phase == APPROACH:
-            planar_error = self.planned_base_xy - current_xy
-            error_norm = np.linalg.norm(planar_error)
-            if error_norm > 1e-9:
-                self.body_ref[7:9] = (
-                    self.approach_speed * planar_error / error_norm
-                )
-
     def _update_arm_reference(self, observation):
         """Re-solve IK from the current body pose once per MPPI update."""
         self._update_arm_reference_to(
@@ -424,15 +139,9 @@ class MPPI(WholeBodyArmMPPI):
         if self.goal_index < len(self.ee_goal_pos) - 1 and self.timer.done:
             transition_source = self.trajectory.copy()
             self.goal_index += 1
-            self._planned_goal_index = -1
-            initial_qpos = (
-                self.obs[:self.model.nq]
-                if self.obs is not None
-                else self.ik_data.qpos.copy()
-            )
             self.arm_reference = self._solve_arm_ik(
                 self.ee_goal_pos[self.goal_index],
-                initial_qpos,
+                self.ik_data.qpos.copy(),
                 damping=self.arm_ik_damping,
                 step_size=self.arm_ik_step_size,
                 max_iterations=self.arm_ik_max_iterations,
@@ -457,8 +166,6 @@ class MPPI(WholeBodyArmMPPI):
 
     def goal_reached(self, observation):
         """Check whether the current EE goal satisfies its thresholds."""
-        if self.adaptive_gait_enabled and self.motion_phase != TRACK:
-            return False
         position, quat = self._ee_pose(observation)
         target_pos = self.ee_goal_pos[self.goal_index]
         target_quat = self.ee_goal_quat[self.goal_index]
@@ -470,7 +177,6 @@ class MPPI(WholeBodyArmMPPI):
     def update(self, obs):
         """Sample, rollout, score, and update the MPPI action trajectory."""
         self.obs = np.asarray(obs, dtype=float)
-        self._update_motion_reference(self.obs)
         self._update_arm_reference(self.obs)
         if self.nominal_from_gait:
             # Arm IK changes every update, so refresh the whole-body prior

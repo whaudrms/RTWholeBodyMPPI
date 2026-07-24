@@ -21,6 +21,7 @@ Examples
     python convert_gait_reference.py --mode padding
     python convert_gait_reference.py --mode transfer
     python convert_gait_reference.py --mode transfer --step-height 0.10 --rate 100
+    python convert_gait_reference.py --mode transfer --base-height 0.45 --step-height 0.07
     python convert_gait_reference.py --mode padding --all
 """
 
@@ -279,6 +280,7 @@ def convert_transfer(
     source: Path,
     model_path: Path = DEFAULT_MODEL,
     keyframe: str = "stand",
+    base_height: float | None = None,
     step_height: float | None = None,
     rate: float | None = None,
     arm_position: np.ndarray = DEFAULT_ARM_POSITION,
@@ -303,6 +305,14 @@ def convert_transfer(
     keyframe_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, keyframe)
     if keyframe_id < 0:
         raise ValueError(f"Unknown model keyframe: {keyframe}")
+    if base_height is not None:
+        base_height = float(base_height)
+        if not np.isfinite(base_height) or base_height <= 0.0:
+            raise ValueError("base_height must be finite and positive")
+        # Keep the source model immutable on disk.  All FK and IK resets below
+        # use this in-memory keyframe, so changing its floating-base z creates
+        # a phase-compatible gait for the requested body height.
+        model.key_qpos[keyframe_id, 2] = base_height
     joint_ids = _named_ids(model, mujoco.mjtObj.mjOBJ_JOINT, LEG_JOINT_NAMES)
     foot_ids = _named_ids(model, mujoco.mjtObj.mjOBJ_SITE, LEG_NAMES)
 
@@ -345,6 +355,7 @@ def convert(
     mode: str = "padding",
     model_path: Path = DEFAULT_MODEL,
     keyframe: str = "stand",
+    base_height: float | None = None,
     step_height: float | None = None,
     rate: float | None = None,
     ik_damping: float = 1e-4,
@@ -373,6 +384,7 @@ def convert(
             source,
             model_path=model_path,
             keyframe=keyframe,
+            base_height=base_height,
             step_height=step_height,
             rate=rate,
             arm_position=arm_position,
@@ -380,9 +392,15 @@ def convert(
             ik_tolerance=ik_tolerance,
             ik_max_iterations=ik_max_iterations,
         )
+        height_label = (
+            f"{base_height:.6g}m"
+            if base_height is not None
+            else "model keyframe"
+        )
         header = (
             "B2-Z1 kinematically transferred gait; foot x/y centered on the "
-            "B2 stand keyframe, stance grounded, and swing "
+            "B2 keyframe, stance grounded, "
+            f"base height={height_label}, and swing "
             f"height={target_height:.6g}m; source B2-FK height={source_height:.6g}m; "
             f"max IK residual={residual:.6g}m; rows: 12 leg q, 4 arm q, "
             "12 leg dq, 4 arm dq"
@@ -407,6 +425,7 @@ def convert_all(
     mode: str = "padding",
     model_path: Path = DEFAULT_MODEL,
     keyframe: str = "stand",
+    base_height: float | None = None,
     step_height: float | None = None,
     rate: float | None = None,
     arm_position: np.ndarray = DEFAULT_ARM_POSITION,
@@ -425,6 +444,7 @@ def convert_all(
             mode=mode,
             model_path=model_path,
             keyframe=keyframe,
+            base_height=base_height,
             step_height=step_height,
             rate=rate,
             ik_damping=ik_damping,
@@ -459,6 +479,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--keyframe", default="stand")
     parser.add_argument(
+        "--base-height",
+        type=float,
+        help=(
+            "Override the selected keyframe floating-base z in memory before "
+            "retargeting"
+        ),
+    )
+    parser.add_argument(
         "--step-height",
         type=float,
         help="Transfer swing height in meters; inferred from NNcm filename if omitted",
@@ -484,6 +512,7 @@ def main() -> None:
         mode=args.mode,
         model_path=args.model,
         keyframe=args.keyframe,
+        base_height=args.base_height,
         step_height=args.step_height,
         rate=args.rate,
         ik_damping=args.ik_damping,

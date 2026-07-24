@@ -30,6 +30,23 @@ GAIT_PATHS = {
         GAIT_DIR,
         "FAST/b2_retargeted/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv",
     ),
+    "stance_hold": os.path.join(
+        GAIT_DIR,
+        "FAST/b2_height_conditioned/h_0p543542/stance_hold.tsv",
+    ),
+}
+HEIGHT_GAIT_DIR = os.path.join(GAIT_DIR, "FAST/b2_height_conditioned")
+HEIGHT_GAIT_LEVELS = {
+    0.543542: "h_0p543542",
+    0.45: "h_0p450",
+    0.35: "h_0p350",
+}
+HEIGHT_GAIT_PATHS = {
+    gait_name: {
+        height: os.path.join(HEIGHT_GAIT_DIR, directory, f"{gait_name}.tsv")
+        for height, directory in HEIGHT_GAIT_LEVELS.items()
+    }
+    for gait_name in ("in_place", "walk_fast", "stance_hold")
 }
 
 
@@ -162,8 +179,15 @@ class WholeBodyArmMPPI(BaseMPPI):
 
     def _joint_reference(self):
         """Combine phase-aligned leg gait with the current arm IK prior."""
-        indices = self.gait_scheduler.indices[:self.horizon]
-        gait = self.gait_scheduler.gait[:, indices]
+        if hasattr(self.gait_scheduler, "get_reference"):
+            gait = self.gait_scheduler.get_reference(
+                self.base_height_cmd,
+                height_rate=self.base_height_rate_cmd,
+                horizon=self.horizon,
+            )
+        else:
+            indices = self.gait_scheduler.indices[:self.horizon]
+            gait = self.gait_scheduler.gait[:, indices]
         arm_q = np.repeat(self.arm_reference[:, None], self.horizon, axis=1)
         arm_dq = np.zeros_like(arm_q)
         reference = np.vstack((gait[:12], arm_q, gait[16:28], arm_dq))

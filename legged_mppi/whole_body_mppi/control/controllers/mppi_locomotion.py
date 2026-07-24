@@ -271,6 +271,7 @@ class MPPI(BaseMPPI):
         # Flatten states and actions for batch processing
         states = states.reshape(-1, states.shape[2])
         actions = actions.reshape(-1, actions.shape[2])
+        states = self.state_in_actuator_order(states)
 
         # Repeat and reshape joint references for batch processing
         joints_ref = joints_ref.T

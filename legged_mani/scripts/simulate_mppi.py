@@ -12,6 +12,11 @@ from mani_mppi.utils.tasks import get_task
 
 import argparse
 
+TASK_ALIASES = {
+    "ee_tracking": "locomani",
+}
+
+
 def main(task, viewer_render_rate=30.0, rollout_mode=None):
     T = 2000  # 20 seconds
     VIEWER = True
@@ -28,24 +33,28 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
     
 
     # Get task data
-    task_data = get_task(task)
+    task_name = TASK_ALIASES.get(task, task)
+    task_data = get_task(task_name)
     sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
-    if task in {"locomani", "push_box"}:
+    if task in {"locomani", "ee_tracking", "push_box"}:
         if rollout_mode is not None:
             raise ValueError(
                 "--rollout-mode is currently available for locomotion tasks only"
             )
     if task == "locomani":
         from mani_mppi.control.controllers.mppi_locomani import MPPI
-        agent = MPPI(task=task)
+        agent = MPPI(task=task_name)
+    elif task == "ee_tracking":
+        from mani_mppi.control.controllers.mppi_ee_tracking import MPPI
+        agent = MPPI(task=task_name)
     elif task == "push_box":
         from mani_mppi.control.controllers.mppi_push_box import MPPI
-        agent = MPPI(task=task)
+        agent = MPPI(task=task_name)
     else:
         from mani_mppi.control.controllers.mppi_locomotion import MPPI
-        agent = MPPI(task=task, rollout_mode=rollout_mode)
+        agent = MPPI(task=task_name, rollout_mode=rollout_mode)
     # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
     if viewer_render_rate <= 0:
         raise ValueError("viewer_render_rate must be positive")
@@ -60,7 +69,14 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
 
 if __name__ == "__main__":
     # Define valid tasks
-    VALID_TASKS = ['stand', 'walk_straight', 'big_box', 'locomani', 'push_box']
+    VALID_TASKS = [
+        'stand',
+        'walk_straight',
+        'big_box',
+        'locomani',
+        'ee_tracking',
+        'push_box',
+    ]
 
     # Parse arguments
     parser = argparse.ArgumentParser(description="Run simulation with a specified task.")

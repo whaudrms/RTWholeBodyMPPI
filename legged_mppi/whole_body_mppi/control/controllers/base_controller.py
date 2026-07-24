@@ -29,6 +29,11 @@ class BaseMPPI:
 
         # Load MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(model_path)
+        if self.model.nu != 12 or self.model.nq != 19 or self.model.nv != 18:
+            raise ValueError(
+                "The locomotion controller requires a floating-base quadruped "
+                "model with 12 actuators (nq=19, nv=18, nu=12)."
+            )
         self.model.opt.timestep = params['dt']
         self.model.opt.enableflags = 1  # Override contact settings
         self.model.opt.o_solref = np.array(params['o_solref'])
@@ -39,7 +44,9 @@ class BaseMPPI:
         self.n_samples = params['n_samples']
         self.noise_sigma = np.array(params['noise_sigma'])
         self.num_workers = params['n_workers']
-        self.sampling_init = np.array([-0.3, 1.34, -2.83, 0.3, 1.34, -2.83] * 2)
+        self.sampling_init = np.array(
+            [-0.3, 1.34, -2.83, 0.3, 1.34, -2.83] * 2
+        )
 
         # Initialize rollouts and sampling configurations
         self.h = params['dt']
@@ -59,15 +66,34 @@ class BaseMPPI:
         )
         self.selected_trajectory = None
 
-        # Action limits
-        self.act_dim = 12
-        self.act_max = np.array([0.863, 4.501, -0.888] * 4)
-        self.act_min = np.array([-0.863, -0.686, -2.818] * 4)
+        # Keep controls and costs in actuator order (FR, FL, RR, RL).  MuJoCo
+        # stores qpos/qvel in body-tree order, which is different in the Go2
+        # model, so retain the model indices needed to canonicalize rollouts.
+        self.act_dim = self.model.nu
+        actuator_joint_ids = self.model.actuator_trnid[:, 0]
+        self.joint_qpos_indices = self.model.jnt_qposadr[actuator_joint_ids]
+        self.joint_qvel_indices = (
+            self.model.nq + self.model.jnt_dofadr[actuator_joint_ids]
+        )
+
+        # Read limits from the selected robot rather than using Go1 constants.
+        self.act_min = self.model.actuator_ctrlrange[:, 0].copy()
+        self.act_max = self.model.actuator_ctrlrange[:, 1].copy()
+        self.sampling_init = np.clip(
+            self.sampling_init, self.act_min, self.act_max
+        )
 
     def reset_planner(self):
         """Reset the action planner to its initial state."""
         self.trajectory = np.zeros((self.horizon, self.act_dim))
         self.trajectory += self.sampling_init
+
+    def state_in_actuator_order(self, state):
+        """Return qpos/qvel joints arranged in actuator (controller) order."""
+        ordered_state = state.copy()
+        ordered_state[:, 7:19] = state[:, self.joint_qpos_indices]
+        ordered_state[:, 25:37] = state[:, self.joint_qvel_indices]
+        return ordered_state
 
     def sample_delta_u(self):
         if self.sample_type == 'normal':
