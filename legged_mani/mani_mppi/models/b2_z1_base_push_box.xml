@@ -271,15 +271,15 @@
     <geom name="floor" type="plane" size="0 0 0.05" pos="0 0 0"
           material="push_box_ground" friction="0.8 0.02 0.01" condim="6"/>
 
-    <!-- Original Go1 push-box dimensions and dynamics. The z position is
-         adjusted from 0.1815 to 0.19 because this floor is located at z=0. -->
-    <body name="box" pos="2 0 0.19">
+    <!-- Keep the initial rear-face contact point inside the crouched Z1
+         workspace. The z position is 0.19 because the floor is at z=0. -->
+    <body name="box" pos="1 0 0.19">
       <freejoint name="box_joint"/>
       <inertial pos="0 0 0" mass="3.70"
                 diaginertia="0.0749 0.0749 0.0849"/>
       <geom name="box_geom" type="box" size="0.19 0.19 0.19"
             material="push_box_material"
-            friction="0.0 0.005 0.0001" condim="6"/>
+            priority="1" friction="0.3 0.02 0.01" condim="6"/>
       <!-- Nominal contact point on the face approached from -x. -->
       <site name="box_push_face" pos="-0.19 0 0" size="0.015"
             rgba="1 0 0 0.65" group="4"/>
@@ -364,7 +364,7 @@
                0 1.28 -2.8  0 1.28 -2.8
                0 1.28 -2.8  0 1.28 -2.8
                0 1.0 -0.6 0
-               2 0 0.19 1 0 0 0"
+               1 0 0.19 1 0 0 0"
          ctrl="0 1.28 -2.8  0 1.28 -2.8
                0 1.28 -2.8  0 1.28 -2.8
                0 1.0 -0.6 0"/>
@@ -373,7 +373,7 @@
                0 0.7 -1.5  0 0.7 -1.5
                0 0.7 -1.5  0 0.7 -1.5
                0 1.0 -0.6 0
-               2 0 0.19 1 0 0 0"
+               1 0 0.19 1 0 0 0"
          ctrl="0 0.7 -1.5  0 0.7 -1.5
                0 0.7 -1.5  0 0.7 -1.5
                0 1.0 -0.6 0"/>

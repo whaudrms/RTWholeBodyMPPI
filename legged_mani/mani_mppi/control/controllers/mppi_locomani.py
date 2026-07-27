@@ -25,11 +25,8 @@ from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APPROACH = "approach"
-LOWER = "lower"
-TRACK = "track"
-RECOVER = "recover"
 PLANNING = "planning"
+EXECUTE_PLAN = "execute_plan"
 
 
 class MPPI(WholeBodyArmMPPI):
@@ -100,7 +97,19 @@ class MPPI(WholeBodyArmMPPI):
         self.base_xy_tolerance = float(
             params.get("base_xy_tolerance", 0.05)
         )
+        self.base_xy_reengage_tolerance = float(
+            params.get("base_xy_reengage_tolerance", 0.08)
+        )
+        self.base_height_reengage_tolerance = float(
+            params.get("base_height_reengage_tolerance", 0.025)
+        )
         self.approach_speed = float(params.get("approach_speed", 0.15))
+        self.crouch_speed_scale_min = float(
+            params.get("crouch_speed_scale_min", 0.40)
+        )
+        self.max_fallback_replans = int(
+            params.get("max_fallback_replans", 8)
+        )
         self.approach_gait = params.get("approach_gait", "walk_fast")
         self.tracking_gait = params.get("tracking_gait", "stance_hold")
         if self.approach_gait not in HEIGHT_GAIT_PATHS:
@@ -113,6 +122,11 @@ class MPPI(WholeBodyArmMPPI):
             or self.base_height_tolerance <= 0.0
             or self.base_xy_tolerance <= 0.0
             or self.approach_speed <= 0.0
+            or self.base_xy_reengage_tolerance <= self.base_xy_tolerance
+            or self.base_height_reengage_tolerance
+            <= self.base_height_tolerance
+            or not 0.0 < self.crouch_speed_scale_min <= 1.0
+            or self.max_fallback_replans < 1
         ):
             raise ValueError("Invalid adaptive base-height configuration")
 
@@ -153,7 +167,14 @@ class MPPI(WholeBodyArmMPPI):
         self.gait_scheduler = self.height_gaits[self.default_gait]
         self.base_height_cmd = self.stand_base_height
         self.base_height_rate_cmd = 0.0
-        self.motion_phase = TRACK
+        self.base_xy_cmd = self.body_ref[:2].copy()
+        self.base_xy_rate_cmd = np.zeros(2, dtype=float)
+        self.motion_phase = EXECUTE_PLAN
+        self.plan_settled = False
+        self.planar_gait_active = False
+        self.plan_requires_replan = False
+        self.fallback_replan_count = 0
+        self._fallback_limit_reported = False
         self.planned_base_xy = self.body_ref[:2].copy()
         self.planned_base_height = self.stand_base_height
         self.last_cem_result = None
@@ -200,6 +221,7 @@ class MPPI(WholeBodyArmMPPI):
         """Switch gait banks without resetting the shared phase."""
         if gait_name == self.default_gait:
             return
+        previous_gait = self.default_gait
         transition_source = self.trajectory.copy()
         old_phase = self.gait_scheduler.phase_time
         scheduler = self.height_gaits[gait_name]
@@ -213,15 +235,16 @@ class MPPI(WholeBodyArmMPPI):
         if self.nominal_from_gait:
             self._reset_gait_nominal(transition_source)
             self.last_safe_trajectory = self.trajectory.copy()
+        print(f"Locomani gait: {previous_gait} -> {gait_name}")
 
     def _set_motion_phase(self, phase):
         if phase == self.motion_phase:
             return
         self.motion_phase = phase
-        gait_name = self.approach_gait if phase == APPROACH else self.tracking_gait
-        self._set_gait(gait_name)
+        if phase == PLANNING:
+            self._set_gait(self.tracking_gait)
         print(
-            f"Locomani phase: {phase}, gait={gait_name}, "
+            f"Locomani phase: {phase}, gait={self.default_gait}, "
             f"height={self.base_height_cmd:.3f}"
         )
 
@@ -264,6 +287,9 @@ class MPPI(WholeBodyArmMPPI):
         """Invalidate pending/completed results after an EE goal change."""
         self._planner_request_id += 1
         self._planned_goal_index = -1
+        self.plan_settled = False
+        self.planar_gait_active = False
+        self.plan_requires_replan = False
         if (
             self._planner_future is not None
             and self._planner_future.cancel()
@@ -281,14 +307,33 @@ class MPPI(WholeBodyArmMPPI):
         """Atomically expose a completed plan to the main control thread."""
         result = plan.cem_result
         self.last_cem_result = result
-        self.planned_base_xy = np.asarray(plan.base_xy, dtype=float).copy()
-        self.planned_base_height = float(plan.base_height)
-        self._planned_goal_index = self.goal_index
-        status = (
-            "feasible"
-            if result.metrics.get("feasible", False)
-            else "fallback"
+        feasible = bool(result.metrics.get("feasible", False))
+        collision_valid = bool(
+            result.metrics.get("collision_valid", True)
         )
+        if collision_valid:
+            self.planned_base_xy = np.asarray(
+                plan.base_xy,
+                dtype=float,
+            ).copy()
+            self.planned_base_height = float(plan.base_height)
+        else:
+            # A finite CEM cost can still be returned when every candidate
+            # collides. Never expose that pose as a body command.
+            self.planned_base_xy = np.asarray(
+                observation[:2],
+                dtype=float,
+            ).copy()
+            self.planned_base_height = float(self.base_height_cmd)
+        self._planned_goal_index = self.goal_index
+        self.plan_requires_replan = not feasible
+        self._fallback_limit_reported = False
+        if feasible:
+            status = "feasible"
+        elif collision_valid:
+            status = "fallback-intermediate"
+        else:
+            status = "fallback-rejected-collision"
         timing = (
             ""
             if planning_seconds is None
@@ -303,29 +348,51 @@ class MPPI(WholeBodyArmMPPI):
             f"cost={result.cost:.3f}, evaluations={result.evaluations}"
             f"{timing}"
         )
-        xy_error = np.linalg.norm(
-            self.planned_base_xy - np.asarray(observation[:2])
+        self.base_xy_cmd = np.asarray(observation[:2], dtype=float).copy()
+        self.base_xy_rate_cmd[:] = 0.0
+        self.plan_settled = False
+        self.planar_gait_active = False
+        self._set_motion_phase(EXECUTE_PLAN)
+
+    def _ee_goal_satisfied(self, observation):
+        """Return actual EE success without coupling it to base convergence."""
+        position, quat = self._ee_pose(observation)
+        target_pos = self.ee_goal_pos[self.goal_index]
+        target_quat = self.ee_goal_quat[self.goal_index]
+        return (
+            np.linalg.norm(position - target_pos) <= self.ee_pos_thresh
+            and 1.0 - abs(float(np.dot(quat, target_quat)))
+            <= self.ee_ori_thresh
         )
+
+    def _replan_settled_fallback(self, observation):
+        """Chain a safe fallback waypoint into a new same-goal CEM plan."""
         if (
-            self.base_height_cmd < self.stand_base_height
-            - self.base_height_tolerance
-            and (
-                xy_error > self.base_xy_tolerance
-                or self.planned_base_height > self.base_height_cmd
-                + self.base_height_tolerance
-            )
+            not self.adaptive_gait_enabled
+            or self._planned_goal_index != self.goal_index
+            or not self.plan_requires_replan
+            or not self.plan_settled
+            or self._ee_goal_satisfied(observation)
         ):
-            self._set_motion_phase(RECOVER)
-        elif xy_error > self.base_xy_tolerance:
-            self._set_motion_phase(APPROACH)
-        elif (
-            self.planned_base_height
-            < self.base_height_cmd - self.base_height_tolerance
-        ):
-            self._set_motion_phase(LOWER)
-        else:
-            self.base_height_cmd = self.planned_base_height
-            self._set_motion_phase(TRACK)
+            return
+        if self.fallback_replan_count >= self.max_fallback_replans:
+            if not self._fallback_limit_reported:
+                print(
+                    "CEM fallback replan limit reached: "
+                    f"goal={self.goal_index}, "
+                    f"attempts={self.fallback_replan_count}"
+                )
+                self._fallback_limit_reported = True
+            return
+
+        self.fallback_replan_count += 1
+        print(
+            "CEM intermediate plan settled; replanning same EE goal: "
+            f"goal={self.goal_index}, "
+            f"attempt={self.fallback_replan_count}/"
+            f"{self.max_fallback_replans}"
+        )
+        self._invalidate_base_plan()
 
     def _poll_background_plan(self, observation):
         """Apply a ready current-goal result without waiting for the worker."""
@@ -370,7 +437,100 @@ class MPPI(WholeBodyArmMPPI):
         self.base_height_cmd += delta
         self.base_height_rate_cmd = delta / dt
 
+    def _effective_approach_speed(self):
+        """Reduce commanded XY speed as the gait approaches deep crouch."""
+        height_span = self.stand_base_height - self.min_base_height
+        motion_height = min(
+            self.base_height_cmd,
+            self.planned_base_height,
+        )
+        height_ratio = np.clip(
+            (motion_height - self.min_base_height) / height_span,
+            0.0,
+            1.0,
+        )
+        speed_scale = (
+            self.crouch_speed_scale_min
+            + (1.0 - self.crouch_speed_scale_min) * height_ratio
+        )
+        return self.approach_speed * speed_scale
+
+    def _ramp_xy(self, target_xy):
+        """Rate-limit the world-frame planar body command."""
+        dt = float(self.model.opt.timestep)
+        error = np.asarray(target_xy, dtype=float) - self.base_xy_cmd
+        error_norm = np.linalg.norm(error)
+        max_step = self._effective_approach_speed() * dt
+        if error_norm <= max_step:
+            delta = error
+        elif error_norm > 1e-12:
+            delta = max_step * error / error_norm
+        else:
+            delta = np.zeros(2, dtype=float)
+        self.base_xy_cmd += delta
+        self.base_xy_rate_cmd = delta / dt
+
+    def _update_plan_settled(self, observation):
+        """Update convergence with hysteresis and return planar motion need."""
+        current_xy = np.asarray(observation[:2], dtype=float)
+        xy_error = np.linalg.norm(self.planned_base_xy - current_xy)
+        height_error = abs(
+            float(observation[2]) - self.planned_base_height
+        )
+        xy_command_error = np.linalg.norm(
+            self.planned_base_xy - self.base_xy_cmd
+        )
+        height_command_error = abs(
+            self.planned_base_height - self.base_height_cmd
+        )
+        commands_finished = (
+            xy_command_error <= 1e-9
+            and height_command_error <= 1e-9
+        )
+
+        if self.plan_settled:
+            if (
+                not commands_finished
+                or xy_error > self.base_xy_reengage_tolerance
+                or height_error > self.base_height_reengage_tolerance
+            ):
+                self.plan_settled = False
+                print(
+                    "Locomani plan tracking re-engaged: "
+                    f"xy_error={xy_error:.3f}, "
+                    f"height_error={height_error:.3f}"
+                )
+        elif (
+            commands_finished
+            and xy_error <= self.base_xy_tolerance
+            and height_error <= self.base_height_tolerance
+        ):
+            self.plan_settled = True
+            print(
+                "Locomani plan settled: "
+                f"base_xy={np.round(current_xy, 3)}, "
+                f"height={float(observation[2]):.3f}"
+            )
+
+        planar_motion_needed = (
+            xy_command_error > 1e-9
+            or xy_error > self.base_xy_tolerance
+        )
+        if self.planar_gait_active:
+            if not planar_motion_needed:
+                self.planar_gait_active = False
+        elif (
+            xy_command_error > 1e-9
+            or xy_error > self.base_xy_reengage_tolerance
+        ):
+            self.planar_gait_active = True
+        return self.planar_gait_active
+
     def _update_motion_reference(self, observation):
+        # A fallback at the bounded CEM search radius is an intermediate body
+        # waypoint. Give the simulator one control interval to accept an EE hit,
+        # then continue planning from the newly reached body pose if necessary.
+        self._replan_settled_fallback(observation)
         if (
             self.adaptive_gait_enabled
             and self._planned_goal_index != self.goal_index
@@ -379,7 +539,14 @@ class MPPI(WholeBodyArmMPPI):
             if not plan_ready:
                 # CEM is running on private data. Keep a stationary reference
                 # so the main MPPI loop remains active and safe meanwhile.
-                self.body_ref[:2] = np.asarray(observation[:2], dtype=float)
+                self.base_xy_cmd = np.asarray(
+                    observation[:2],
+                    dtype=float,
+                ).copy()
+                self.base_xy_rate_cmd[:] = 0.0
+                self.plan_settled = False
+                self.planar_gait_active = False
+                self.body_ref[:2] = self.base_xy_cmd
                 self.body_ref[2] = self.base_height_cmd
                 self.body_ref[3:7] = np.array(
                     [1.0, 0.0, 0.0, 0.0]
@@ -388,66 +555,22 @@ class MPPI(WholeBodyArmMPPI):
                 self.base_height_rate_cmd = 0.0
                 return
 
-        current_xy = np.asarray(observation[:2], dtype=float)
-        if self.motion_phase == RECOVER:
-            self.body_ref[:2] = current_xy
-            self._ramp_height(self.stand_base_height)
-            if (
-                abs(observation[2] - self.stand_base_height)
-                <= self.base_height_tolerance
-                and abs(self.base_height_cmd - self.stand_base_height)
-                <= 1e-9
-            ):
-                xy_error = np.linalg.norm(self.planned_base_xy - current_xy)
-                if xy_error > self.base_xy_tolerance:
-                    self._set_motion_phase(APPROACH)
-                elif (
-                    self.planned_base_height
-                    < self.stand_base_height - self.base_height_tolerance
-                ):
-                    self._set_motion_phase(LOWER)
-                else:
-                    self._set_motion_phase(TRACK)
-        elif self.motion_phase == APPROACH:
-            self.base_height_cmd = self.stand_base_height
-            self.base_height_rate_cmd = 0.0
-            self.body_ref[:2] = self.planned_base_xy
-            if (
-                np.linalg.norm(self.planned_base_xy - current_xy)
-                <= self.base_xy_tolerance
-            ):
-                if (
-                    self.planned_base_height
-                    < self.stand_base_height - self.base_height_tolerance
-                ):
-                    self._set_motion_phase(LOWER)
-                else:
-                    self._set_motion_phase(TRACK)
-        elif self.motion_phase == LOWER:
-            self.body_ref[:2] = self.planned_base_xy
-            self._ramp_height(self.planned_base_height)
-            if (
-                abs(observation[2] - self.planned_base_height)
-                <= self.base_height_tolerance
-                and abs(self.base_height_cmd - self.planned_base_height)
-                <= 1e-9
-            ):
-                self._set_motion_phase(TRACK)
-        else:
-            self.body_ref[:2] = self.planned_base_xy
-            self.base_height_cmd = self.planned_base_height
-            self.base_height_rate_cmd = 0.0
+        self._set_motion_phase(EXECUTE_PLAN)
+        self._ramp_xy(self.planned_base_xy)
+        self._ramp_height(self.planned_base_height)
+        planar_gait_active = self._update_plan_settled(observation)
+        desired_gait = (
+            self.approach_gait
+            if planar_gait_active and not self.plan_settled
+            else self.tracking_gait
+        )
+        self._set_gait(desired_gait)
 
+        self.body_ref[:2] = self.base_xy_cmd
         self.body_ref[2] = self.base_height_cmd
         self.body_ref[3:7] = np.array([1.0, 0.0, 0.0, 0.0])
         self.body_ref[7:13] = 0.0
-        if self.motion_phase == APPROACH:
-            planar_error = self.planned_base_xy - current_xy
-            error_norm = np.linalg.norm(planar_error)
-            if error_norm > 1e-9:
-                self.body_ref[7:9] = (
-                    self.approach_speed * planar_error / error_norm
-                )
+        self.body_ref[7:9] = self.base_xy_rate_cmd
 
     def _update_arm_reference(self, observation):
         """Re-solve IK from the current body pose once per MPPI update."""
@@ -463,6 +586,8 @@ class MPPI(WholeBodyArmMPPI):
             transition_source = self.trajectory.copy()
             self.goal_index += 1
             self._invalidate_base_plan()
+            self.fallback_replan_count = 0
+            self._fallback_limit_reported = False
             initial_qpos = (
                 self.obs[:self.model.nq]
                 if self.obs is not None
@@ -495,15 +620,12 @@ class MPPI(WholeBodyArmMPPI):
 
     def goal_reached(self, observation):
         """Check whether the current EE goal satisfies its thresholds."""
-        if self.adaptive_gait_enabled and self.motion_phase != TRACK:
+        if self.adaptive_gait_enabled and (
+            self._planned_goal_index != self.goal_index
+            or self.motion_phase != EXECUTE_PLAN
+        ):
             return False
-        position, quat = self._ee_pose(observation)
-        target_pos = self.ee_goal_pos[self.goal_index]
-        target_quat = self.ee_goal_quat[self.goal_index]
-        return (
-            np.linalg.norm(position - target_pos) <= self.ee_pos_thresh
-            and 1.0 - abs(float(np.dot(quat, target_quat))) <= self.ee_ori_thresh
-        )
+        return self._ee_goal_satisfied(observation)
 
     def close(self):
         """Shut down the private CEM worker and the MPPI rollout workers."""

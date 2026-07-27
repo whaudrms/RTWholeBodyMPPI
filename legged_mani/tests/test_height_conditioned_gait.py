@@ -12,11 +12,8 @@ import mujoco
 import numpy as np
 
 from mani_mppi.control.controllers.mppi_locomani import (
-    APPROACH,
-    LOWER,
+    EXECUTE_PLAN,
     PLANNING,
-    RECOVER,
-    TRACK,
     MPPI,
 )
 from mani_mppi.control.controllers.whole_body_arm_controller import (
@@ -155,7 +152,14 @@ class LocomaniAdaptiveMotionTest(unittest.TestCase):
         self.agent._planned_goal_index = -1
         self.agent.base_height_cmd = self.agent.stand_base_height
         self.agent.base_height_rate_cmd = 0.0
-        self.agent.motion_phase = TRACK
+        self.agent.base_xy_cmd = self.stand_observation[:2].copy()
+        self.agent.base_xy_rate_cmd[:] = 0.0
+        self.agent.motion_phase = EXECUTE_PLAN
+        self.agent.plan_settled = False
+        self.agent.planar_gait_active = False
+        self.agent.plan_requires_replan = False
+        self.agent.fallback_replan_count = 0
+        self.agent._fallback_limit_reported = False
         self.agent.default_gait = self.agent.tracking_gait
         self.agent.gait_scheduler = self.agent.height_gaits[
             self.agent.tracking_gait
@@ -164,14 +168,24 @@ class LocomaniAdaptiveMotionTest(unittest.TestCase):
         self.agent.body_ref[7:13] = 0.0
 
     @staticmethod
-    def _fake_plan(base_xy, base_height) -> BasePosePlan:
+    def _fake_plan(
+        base_xy,
+        base_height,
+        *,
+        feasible=True,
+        collision_valid=True,
+    ) -> BasePosePlan:
         return BasePosePlan(
             base_xy=np.asarray(base_xy, dtype=float),
             base_height=float(base_height),
             cem_result=CEMResult(
                 solution=np.array([0.0, 0.0, base_height]),
                 cost=0.0,
-                metrics={"feasible": True, "residual": 0.0},
+                metrics={
+                    "feasible": feasible,
+                    "collision_valid": collision_valid,
+                    "residual": 0.0 if feasible else 0.04,
+                },
                 evaluations=0,
                 iterations=0,
             ),
@@ -212,7 +226,8 @@ class LocomaniAdaptiveMotionTest(unittest.TestCase):
         finally:
             release.set()
 
-        self.assertEqual(self.agent.motion_phase, TRACK)
+        self.assertEqual(self.agent.motion_phase, EXECUTE_PLAN)
+        self.assertTrue(self.agent.plan_settled)
 
     def test_floor_goal_selects_crouch_and_sequences_motion(self) -> None:
         observation = self.stand_observation.copy()
@@ -261,34 +276,39 @@ class LocomaniAdaptiveMotionTest(unittest.TestCase):
             self.agent.base_pose_planner.optimizer.num_iterations,
         )
 
-        self.assertEqual(self.agent.motion_phase, APPROACH)
+        self.assertEqual(self.agent.motion_phase, EXECUTE_PLAN)
         self.assertLess(
             self.agent.planned_base_height,
             self.agent.stand_base_height,
         )
+        self.assertGreater(
+            np.linalg.norm(
+                self.agent.base_xy_cmd - observation[:2]
+            ),
+            0.0,
+        )
+        self.assertLess(
+            self.agent.base_height_cmd,
+            self.agent.stand_base_height,
+        )
+        self.assertEqual(
+            self.agent.default_gait,
+            self.agent.approach_gait,
+        )
 
-        observation[:2] = self.agent.planned_base_xy
-        self.agent._update_motion_reference(observation)
-        self.assertEqual(self.agent.motion_phase, LOWER)
-
-        max_steps = int(
-            np.ceil(
-                (
-                    self.agent.stand_base_height
-                    - self.agent.planned_base_height
-                )
-                / (
-                    self.agent.base_height_rate
-                    * self.agent.model.opt.timestep
-                )
-            )
-        ) + 2
-        for _ in range(max_steps):
-            self.agent._update_motion_reference(observation)
+        for _ in range(500):
+            observation[:2] = self.agent.base_xy_cmd
             observation[2] = self.agent.base_height_cmd
+            self.agent._update_motion_reference(observation)
+            if self.agent.plan_settled:
+                break
 
-        self.agent._update_motion_reference(observation)
-        self.assertEqual(self.agent.motion_phase, TRACK)
+        self.assertTrue(self.agent.plan_settled)
+        self.assertEqual(self.agent.motion_phase, EXECUTE_PLAN)
+        self.assertEqual(
+            self.agent.default_gait,
+            self.agent.tracking_gait,
+        )
         self.assertAlmostEqual(
             self.agent.body_ref[2],
             self.agent.planned_base_height,
@@ -298,27 +318,107 @@ class LocomaniAdaptiveMotionTest(unittest.TestCase):
             [1.0, 0.0, 0.0, 0.0],
         )
 
-    def test_recovers_to_stand_before_walking_to_a_new_goal(self) -> None:
+    def test_raises_and_moves_continuously_without_recover(self) -> None:
         observation = self.stand_observation.copy()
         observation[2] = 0.40
         self.agent.base_height_cmd = 0.40
+        self.agent.base_xy_cmd = observation[:2].copy()
         next_base_xy = observation[:2] + np.array([0.30, 0.0])
         self.agent._apply_base_pose_plan(
             observation,
             self._fake_plan(next_base_xy, self.agent.stand_base_height),
         )
 
-        self.assertEqual(self.agent.motion_phase, RECOVER)
-        held_xy = observation[:2].copy()
-        while self.agent.motion_phase == RECOVER:
-            self.agent._update_motion_reference(observation)
-            observation[2] = self.agent.base_height_cmd
-            np.testing.assert_allclose(self.agent.body_ref[:2], held_xy)
+        initial_xy_cmd = self.agent.base_xy_cmd.copy()
+        self.agent._update_motion_reference(observation)
+        self.assertEqual(self.agent.motion_phase, EXECUTE_PLAN)
+        self.assertGreater(
+            self.agent.base_xy_cmd[0],
+            initial_xy_cmd[0],
+        )
+        self.assertGreater(self.agent.base_height_cmd, 0.40)
 
-        self.assertEqual(self.agent.motion_phase, APPROACH)
+        for _ in range(500):
+            observation[:2] = self.agent.base_xy_cmd
+            observation[2] = self.agent.base_height_cmd
+            self.agent._update_motion_reference(observation)
+            if self.agent.plan_settled:
+                break
+
+        self.assertTrue(self.agent.plan_settled)
         self.assertAlmostEqual(
             self.agent.base_height_cmd,
             self.agent.stand_base_height,
+        )
+
+    def test_goal_completion_uses_actual_ee_without_settled_gate(self) -> None:
+        observation = self.stand_observation.copy()
+        self.agent._planned_goal_index = self.agent.goal_index
+        self.agent.motion_phase = EXECUTE_PLAN
+        target_quat = self.agent.ee_goal_quat[self.agent.goal_index]
+        with patch.object(
+            self.agent,
+            "_ee_pose",
+            return_value=(
+                self.agent.ee_goal_pos[self.agent.goal_index].copy(),
+                target_quat.copy(),
+            ),
+        ):
+            self.agent.plan_settled = False
+            self.assertTrue(self.agent.goal_reached(observation))
+
+    def test_settled_fallback_replans_same_goal(self) -> None:
+        observation = self.stand_observation.copy()
+        fallback_xy = observation[:2] + np.array([0.30, 0.0])
+        self.agent._apply_base_pose_plan(
+            observation,
+            self._fake_plan(
+                fallback_xy,
+                self.agent.stand_base_height,
+                feasible=False,
+            ),
+        )
+        self.agent.base_xy_cmd = fallback_xy.copy()
+        observation[:2] = fallback_xy
+        self.agent.plan_settled = True
+
+        with (
+            patch.object(
+                self.agent,
+                "_ee_goal_satisfied",
+                return_value=False,
+            ),
+            patch.object(
+                self.agent,
+                "_start_background_plan",
+            ) as start_plan,
+        ):
+            self.agent._update_motion_reference(observation)
+
+        self.assertEqual(self.agent.fallback_replan_count, 1)
+        self.assertEqual(self.agent._planned_goal_index, -1)
+        start_plan.assert_called_once_with(observation)
+
+    def test_collision_fallback_is_not_executed(self) -> None:
+        observation = self.stand_observation.copy()
+        unsafe_xy = observation[:2] + np.array([0.30, 0.0])
+        self.agent._apply_base_pose_plan(
+            observation,
+            self._fake_plan(
+                unsafe_xy,
+                self.agent.min_base_height,
+                feasible=False,
+                collision_valid=False,
+            ),
+        )
+
+        np.testing.assert_allclose(
+            self.agent.planned_base_xy,
+            observation[:2],
+        )
+        self.assertAlmostEqual(
+            self.agent.planned_base_height,
+            self.agent.base_height_cmd,
         )
 
     def test_discards_stale_background_result(self) -> None:

@@ -8,6 +8,7 @@ Each task is represented as a dictionary containing key parameters:
 - `goal_thresh`: Thresholds for achieving goals.
 - `desired_gait`: Gait type for each phase of the task.
 - `waiting_times`: Number of simulator steps to wait at each EE waypoint.
+- `box_pos_ref`: World-frame box position target for manipulation tasks.
 - `model_path`: Path to the robot's model file.
 - `config_path`: Path to the robot's configuration file.
 - `sim_path`: Path to the simulation file.
@@ -141,21 +142,11 @@ TASKS = {
         "sim_path": DEFAULT_SIM_PATH,
     },
     "push_box": {
-        # Nominal references for approach, contact, push, and hold. The
-        # controller recomputes the actual body/EE reference from the moving
-        # box, so these values document the initial and final staging poses.
-        "goal_pos": [[2.0, -0.78, STAND_BASE_HEIGHT],
-                     [2.0, -0.78, STAND_BASE_HEIGHT],
-                     [2.0, 0.22, STAND_BASE_HEIGHT],
-                     [2.0, 0.22, STAND_BASE_HEIGHT]],
-        "default_orientation": [[0.70710678, 0.0, 0.0, 0.70710678]] * 4,
-        "cmd_vel": [[0.25, 0.0],
-                    [0.0, 0.0],
-                    [0.15, 0.0],
-                    [0.0, 0.0]],
-        "goal_thresh": [0.20, 0.08, 0.30, 0.0],
-        "desired_gait": ['walk_fast', 'in_place', 'walk', 'in_place'],
-        "waiting_times": [0, 0, 0, 0],
+        # The controller derives its moving EE contact target and CEM base pose
+        # from the observed box pose; no scripted locomotion phases are stored.
+        "ee_site": "gripper_center",
+        "box_joint": "box_joint",
+        "box_geom": "box_geom",
         "box_pos_ref": [3.0, 2.0, 0.19],
 
         "model_path": 'models/b2_z1_base_push_box.xml',

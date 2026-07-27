@@ -57,7 +57,7 @@ class Simulator:
                  model_path = os.path.join(os.path.dirname(__file__), "../models/b2_z1_4dof.xml"),
                 T = 200, dt = 0.01, viewer = True, gravity = True,
                 # stiff=False
-                timeconst=0.02, dampingratio=1.0, ctrl_rate=100,
+                timeconst=0.02, dampingratio=1.0, ctrl_rate=25,
                 save_dir="./frames", save_frames=False, render_every=1
                 ):
         # filter
@@ -200,6 +200,29 @@ class Simulator:
                     type=mujoco.mjtGeom.mjGEOM_SPHERE, # Specify that this is a sphere
                     label=""
                 )
+
+                # The magenta marker above is the rate-limited command. Show
+                # the raw CEM base decision separately so planning latency is
+                # not confused with deliberate motion interpolation.
+                if (
+                    hasattr(self.agent, "planned_base_xy")
+                    and hasattr(self.agent, "planned_base_height")
+                ):
+                    planned_base_pos = np.array(
+                        [
+                            self.agent.planned_base_xy[0],
+                            self.agent.planned_base_xy[1],
+                            self.agent.planned_base_height,
+                        ],
+                        dtype=float,
+                    )
+                    self.viewer.add_marker(
+                        pos=planned_base_pos,
+                        size=[0.07, 0.07, 0.07],
+                        rgba=[0.0, 1.0, 1.0, 1.0],
+                        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                        label="CEM base target",
+                    )
 
                 # Show the current manipulator end-effector goal.
                 if hasattr(self.agent, "ee_goal_pos"):

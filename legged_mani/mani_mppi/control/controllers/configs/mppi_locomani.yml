@@ -30,7 +30,15 @@ min_base_height: 0.35
 base_height_rate: 0.10
 base_height_tolerance: 0.015
 base_xy_tolerance: 0.05
-approach_speed: 0.15
+# Larger exit tolerances prevent walk/hold chatter after the plan settles.
+base_height_reengage_tolerance: 0.025
+base_xy_reengage_tolerance: 0.08
+approach_speed: 0.2
+# Deep-crouch XY commands are slowed to this fraction of approach_speed.
+crouch_speed_scale_min: 0.40
+# A fallback at the bounded CEM XY radius is treated as an intermediate
+# waypoint. This limits same-goal chaining when a target is truly unreachable.
+max_fallback_replans: 8
 
 reachability_residual_threshold: 0.03
 reachability_max_xy_shift: 0.40
