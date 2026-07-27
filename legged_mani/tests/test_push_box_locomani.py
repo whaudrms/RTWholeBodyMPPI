@@ -82,6 +82,43 @@ class PushBoxLocomaniTest(unittest.TestCase):
 
         np.testing.assert_allclose(costs, [0.0, 100.0, 150.0, 0.0])
 
+    def test_box_orientation_constraint_is_yaw_invariant(self) -> None:
+        box_states = np.zeros((4, 13), dtype=float)
+        box_states[:, 3] = 1.0
+        yaw = np.pi / 2.0
+        box_states[1, 3:7] = [
+            np.cos(0.5 * yaw), 0.0, 0.0, np.sin(0.5 * yaw)
+        ]
+        safe_roll = 0.20
+        box_states[2, 3:7] = [
+            np.cos(0.5 * safe_roll),
+            np.sin(0.5 * safe_roll),
+            0.0,
+            0.0,
+        ]
+        violating_roll = 0.50
+        box_states[3, 3:7] = [
+            np.cos(0.5 * violating_roll),
+            np.sin(0.5 * violating_roll),
+            0.0,
+            0.0,
+        ]
+
+        costs = self.agent._box_orientation_cost(box_states)
+
+        np.testing.assert_allclose(costs[:2], [0.0, 0.0], atol=1e-10)
+        self.assertAlmostEqual(
+            costs[2],
+            self.agent.box_orientation_weight * safe_roll**2,
+        )
+        self.assertAlmostEqual(
+            costs[3],
+            (
+                self.agent.box_orientation_weight * violating_roll**2
+                + self.agent.box_orientation_violation_penalty
+            ),
+        )
+
     def test_contact_target_uses_rotated_box_surface(self) -> None:
         box_state = np.zeros((1, 13), dtype=float)
         box_state[0, :3] = [0.0, 0.0, self.agent.box_half_size[2]]

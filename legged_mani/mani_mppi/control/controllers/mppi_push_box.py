@@ -51,6 +51,13 @@ class MPPI(WholeBodyArmMPPI):
         self.state_cost_weights = np.asarray(params["Q_diag"], dtype=float)
         self.box_cost_weights = np.asarray(params["Q_box"], dtype=float)
         self.control_cost_weights = np.asarray(params["R_diag"], dtype=float)
+        self.box_orientation_weight = float(
+            params["box_orientation_weight"]
+        )
+        self.box_max_tilt = float(params["box_max_tilt"])
+        self.box_orientation_violation_penalty = float(
+            params["box_orientation_violation_penalty"]
+        )
         if self.state_cost_weights.shape != (robot_state_dim,):
             raise ValueError(
                 f"Q_diag must contain {robot_state_dim} robot-state weights"
@@ -141,8 +148,11 @@ class MPPI(WholeBodyArmMPPI):
                 self.cem_replan_distance,
                 self.cem_target_stale_tolerance,
                 self.base_box_clearance,
+                self.box_orientation_weight,
+                self.box_orientation_violation_penalty,
             )
             < 0.0
+            or not 0.0 < self.box_max_tilt <= np.pi
         ):
             raise ValueError("Invalid push-box controller configuration")
         for gait_name in (self.approach_gait, self.tracking_gait):
@@ -359,6 +369,21 @@ class MPPI(WholeBodyArmMPPI):
         position_error = box_states[:, :3] - self.x_box_ref[None, :]
         return np.sum(
             np.abs(position_error) * self.box_cost_weights[None, :], axis=1
+        )
+
+    def _box_orientation_cost(self, box_states):
+        """Penalize roll/pitch tilt while leaving box yaw unconstrained."""
+        box_states = np.asarray(box_states, dtype=float)
+        if box_states.ndim != 2 or box_states.shape[1] < 7:
+            raise ValueError("box_states must have shape (N, >=7)")
+        rotations = self._quat_rotation_matrices(box_states[:, 3:7])
+        # R[2, 2] is the world-z component of the box's local up axis. It is
+        # invariant to pure yaw, so diagonal pushing does not incur a penalty.
+        tilt = np.arccos(np.clip(rotations[:, 2, 2], -1.0, 1.0))
+        violation = tilt > self.box_max_tilt
+        return (
+            self.box_orientation_weight * tilt * tilt
+            + self.box_orientation_violation_penalty * violation
         )
 
     def _update_task_references(self, observation, *, allow_engagement=True):
@@ -1021,9 +1046,13 @@ class MPPI(WholeBodyArmMPPI):
             flat_robot_states, flat_actions, robot_ref
         )
         box_cost = self.box_cost_np(flat_box_states)
+        box_orientation_cost = self._box_orientation_cost(
+            flat_box_states
+        )
         costs = (
             robot_cost
             + box_cost
+            + box_orientation_cost
             + ee_position_cost
             + ee_orientation_cost
             + collision_cost

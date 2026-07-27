@@ -189,9 +189,20 @@ Q_diag:
   - 0.0
   - 0.0
 
+
+# ============================
+# Box Cost Parameters
+# ============================
 # Original Go1 box-position L1 cost. The target position is configured only by
-# tasks.py: TASKS["push_box"]["box_pos_ref"]. Box orientation is not scored.
+# tasks.py: TASKS["push_box"]["box_pos_ref"].
 Q_box: [1000.0, 1500.0, 0.0]
+
+# Keep the box upright while leaving yaw unconstrained. The continuous tilt
+# cost guides MPPI before the threshold is reached; the violation penalty
+# strongly rejects rollouts that tip beyond box_max_tilt.
+box_orientation_weight: 10000.0
+box_max_tilt: 0.35
+box_orientation_violation_penalty: 100000.0
 
 # ============================
 # Control Cost Matrix R
@@ -250,7 +261,7 @@ precontact_gap: 0.05
 push_penetration: 0.015
 ee_contact_height_offset: -0.05
 ee_contact_tolerance: 0.04
-box_goal_tolerance: 0.30
+box_goal_tolerance: 0.20
 box_goal_hold_steps: 20
 cem_replan_distance: 0.08
 cem_target_stale_tolerance: 0.10

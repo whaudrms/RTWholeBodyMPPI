@@ -13,9 +13,15 @@ from mani_mppi.utils.tasks import get_task
 import argparse
 
 
-def main(task, viewer_render_rate=30.0, rollout_mode=None):
+def main(
+    task,
+    viewer_render_rate=30.0,
+    rollout_mode=None,
+    plot=False,
+    headless=False,
+):
     T = 2000  # 20 seconds
-    VIEWER = True
+    viewer_enabled = not headless
 
     SIMULATION_STEP = 0.01
     CTRL_UPDATE_RATE = 100
@@ -51,16 +57,22 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
         from mani_mppi.control.controllers.mppi_locomotion import MPPI
         agent = MPPI(task=task, rollout_mode=rollout_mode)
     # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
-    if viewer_render_rate <= 0:
-        raise ValueError("viewer_render_rate must be positive")
-    render_every = max(1, round(1.0 / (SIMULATION_STEP * viewer_render_rate)))
-    simulator = Simulator(agent=agent, viewer=VIEWER, T=T, dt=SIMULATION_STEP, timeconst=TIMECONST,
+    if viewer_enabled:
+        if viewer_render_rate <= 0:
+            raise ValueError("viewer_render_rate must be positive")
+        render_every = max(
+            1, round(1.0 / (SIMULATION_STEP * viewer_render_rate))
+        )
+    else:
+        render_every = 1
+    simulator = Simulator(agent=agent, viewer=viewer_enabled, T=T, dt=SIMULATION_STEP, timeconst=TIMECONST,
                           dampingratio=DAMPINGRATIO, model_path=sim_path, ctrl_rate=CTRL_UPDATE_RATE,
-                          render_every=render_every)
+                          render_every=render_every, plot_enabled=plot)
     
     # Run simulation
     simulator.run()
-    simulator.plot_trajectory()
+    if plot:
+        simulator.plot_trajectory()
 
 if __name__ == "__main__":
     # Define valid tasks
@@ -89,6 +101,22 @@ if __name__ == "__main__":
             'cubic sampling.'
         ),
     )
+    parser.add_argument(
+        '--plot',
+        action='store_true',
+        help=(
+            'Record task diagnostics and save the dashboard/cost log after '
+            'simulation. Disabled by default to avoid runtime logging overhead.'
+        ),
+    )
+    parser.add_argument(
+        '--headless',
+        action='store_true',
+        help=(
+            'Run without creating or rendering the MuJoCo viewer. Can be '
+            'combined with --plot to save diagnostics without a GUI.'
+        ),
+    )
     args = parser.parse_args()
 
     # Run main with the provided task
@@ -96,4 +124,6 @@ if __name__ == "__main__":
         args.task,
         viewer_render_rate=args.render_rate,
         rollout_mode=args.rollout_mode,
+        plot=args.plot,
+        headless=args.headless,
     )
