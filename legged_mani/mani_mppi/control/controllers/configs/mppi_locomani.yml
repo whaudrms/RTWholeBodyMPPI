@@ -33,10 +33,33 @@ base_xy_tolerance: 0.05
 approach_speed: 0.15
 
 reachability_residual_threshold: 0.03
-reachability_height_candidates: [0.543542, 0.50, 0.45, 0.40, 0.35]
-reachability_xy_step: 0.05
 reachability_max_xy_shift: 0.40
-reachability_ik_iterations: 100
+reachability_ik_iterations: 40
+
+# Continuous [delta_x, delta_y, base_z] Cross-Entropy Method planner.
+# This upper layer performs only one arm IK per candidate and one vectorized
+# arm/torso collision pass per iteration. A private MuJoCo model/data stack
+# runs in a background worker and never launches or blocks on an MPPI rollout.
+cem_num_samples: 48
+cem_num_iterations: 3
+cem_elite_fraction: 0.20
+cem_smoothing: 0.15
+cem_seed: 1042
+cem_initial_xy_std: 0.20
+cem_initial_height_std: 0.08
+cem_min_xy_std: 0.01
+cem_min_height_std: 0.005
+
+# Dimensionless CEM pose-objective weights.
+cem_infeasible_penalty: 1000.0
+cem_reachability_weight: 100.0
+cem_residual_weight: 1.0
+cem_xy_weight: 6.0
+cem_height_weight: 3.0
+cem_clearance_weight: 2.0
+cem_joint_limit_weight: 1.0
+cem_joint_limit_margin: 0.10
+cem_collision_penalty: 1000000.0
 
 # Arm IK parameters used to generate the nominal arm-joint reference.
 arm_ik_damping: 0.05
@@ -198,8 +221,8 @@ disable_arm_torso_rollout_contact: true
 rollout_arm_root_body: "link00"
 collision_capsule_radii: [0.030, 0.030, 0.0375]
 collision_shoulder_exclusion: 0.07
-collision_safe_distance: 0.10
-collision_hard_distance: 0.005
+collision_safe_distance: 0.005
+collision_hard_distance: 0.0
 collision_soft_weight: 10000.0
 
 # ============================

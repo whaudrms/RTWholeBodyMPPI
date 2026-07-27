@@ -1,6 +1,8 @@
 """Whole-body MPPI controller for B2-Z1 locomani tasks."""
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import mujoco
 import numpy as np
@@ -14,6 +16,10 @@ from mani_mppi.control.gait_scheduler.height_conditioned_scheduler import (
     HeightConditionedGaitScheduler,
 )
 from mani_mppi.control.gait_scheduler.scheduler import Timer
+from mani_mppi.control.planning import (
+    BasePosePlan,
+    KinematicBasePoseCEMPlanner,
+)
 from mani_mppi.utils.tasks import get_task
 from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
@@ -23,6 +29,7 @@ APPROACH = "approach"
 LOWER = "lower"
 TRACK = "track"
 RECOVER = "recover"
+PLANNING = "planning"
 
 
 class MPPI(WholeBodyArmMPPI):
@@ -94,25 +101,6 @@ class MPPI(WholeBodyArmMPPI):
             params.get("base_xy_tolerance", 0.05)
         )
         self.approach_speed = float(params.get("approach_speed", 0.15))
-        self.reachability_residual_threshold = float(
-            params.get("reachability_residual_threshold", self.ee_pos_thresh)
-        )
-        self.reachability_height_candidates = np.asarray(
-            params.get(
-                "reachability_height_candidates",
-                [0.543542, 0.50, 0.45, 0.40, 0.35],
-            ),
-            dtype=float,
-        )
-        self.reachability_xy_step = float(
-            params.get("reachability_xy_step", 0.05)
-        )
-        self.reachability_max_xy_shift = float(
-            params.get("reachability_max_xy_shift", 0.40)
-        )
-        self.reachability_ik_iterations = int(
-            params.get("reachability_ik_iterations", 100)
-        )
         self.approach_gait = params.get("approach_gait", "walk_fast")
         self.tracking_gait = params.get("tracking_gait", "stance_hold")
         if self.approach_gait not in HEIGHT_GAIT_PATHS:
@@ -127,20 +115,21 @@ class MPPI(WholeBodyArmMPPI):
             or self.approach_speed <= 0.0
         ):
             raise ValueError("Invalid adaptive base-height configuration")
-        if (
-            self.reachability_height_candidates.ndim != 1
-            or not len(self.reachability_height_candidates)
-            or not np.isfinite(self.reachability_height_candidates).all()
-        ):
-            raise ValueError("reachability_height_candidates must be finite")
-        self.reachability_height_candidates = np.unique(np.clip(
-            self.reachability_height_candidates,
-            self.min_base_height,
-            self.stand_base_height,
-        ))[::-1]
 
         # Shared arm IK/FK, rollout sensors, and capsule-to-torso collision.
         self._configure_arm_system(params, self.ee_site_name)
+        # The background planner owns a separate model/data stack. It never
+        # touches the main controller model or the MPPI rollout worker pool.
+        self.base_pose_planner = KinematicBasePoseCEMPlanner(
+            model_path,
+            params,
+            ee_site_name=self.ee_site_name,
+        )
+        self.base_planner_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="locomani-cem",
+        )
+        self._base_planner_closed = False
 
         # The body reference pose comes from the selected MuJoCo keyframe.
         body_keyframe = params.get("body_reference_keyframe", "stand")
@@ -167,7 +156,12 @@ class MPPI(WholeBodyArmMPPI):
         self.motion_phase = TRACK
         self.planned_base_xy = self.body_ref[:2].copy()
         self.planned_base_height = self.stand_base_height
+        self.last_cem_result = None
         self._planned_goal_index = -1
+        self._planner_request_id = 0
+        self._planner_future = None
+        self._planner_future_request_id = None
+        self._planner_future_goal_index = None
 
         # Compute the initial arm posture that reaches the first EE goal.
         self.arm_reference = self._solve_arm_ik(
@@ -231,84 +225,84 @@ class MPPI(WholeBodyArmMPPI):
             f"height={self.base_height_cmd:.3f}"
         )
 
-    def _planner_candidate(self, observation, target, base_xy, base_height):
-        """Evaluate arm reachability and torso clearance at one base pose."""
-        qpos = np.asarray(observation[:self.model.nq], dtype=float).copy()
-        qpos[:2] = base_xy
-        qpos[2] = base_height
-        qpos[3:7] = np.array([1.0, 0.0, 0.0, 0.0])
-        arm_q = self._solve_arm_ik(
-            target,
-            qpos,
-            damping=self.arm_ik_damping,
-            step_size=self.arm_ik_step_size,
-            max_iterations=self.reachability_ik_iterations,
-            tolerance=self.arm_ik_tolerance,
-            strict=False,
+    @staticmethod
+    def _run_base_plan_request(
+        planner,
+        request_id,
+        goal_index,
+        observation,
+        target,
+    ):
+        """Execute one request entirely on the planner-owned model/data."""
+        start_time = time.perf_counter()
+        plan = planner.plan(observation, target)
+        planning_seconds = time.perf_counter() - start_time
+        return request_id, goal_index, plan, planning_seconds
+
+    def _start_background_plan(self, observation):
+        """Submit one non-blocking CEM request for the current EE goal."""
+        if self._planner_future is not None:
+            return
+        request_id = self._planner_request_id
+        goal_index = self.goal_index
+        self._planner_future_request_id = request_id
+        self._planner_future_goal_index = goal_index
+        self._planner_future = self.base_planner_executor.submit(
+            self._run_base_plan_request,
+            self.base_pose_planner,
+            request_id,
+            goal_index,
+            np.asarray(observation, dtype=float).copy(),
+            self.ee_goal_pos[goal_index].copy(),
         )
-        residual = float(self.last_ik_residual)
-        qpos[self.arm_qpos_indices] = arm_q
-        state = np.concatenate((qpos, np.zeros(self.model.nv)))[None, :]
-        arm_positions, _ = self._batch_arm_fk(state)
-        _, valid = self._arm_torso_clearance(state, arm_positions)
-        return residual, bool(np.all(valid))
-
-    def _plan_base_reference(self, observation):
-        """Choose the highest reachable base pose along the EE approach line."""
-        target = self.ee_goal_pos[self.goal_index]
-        current_xy = np.asarray(observation[:2], dtype=float)
-        direction = target[:2] - current_xy
-        norm = np.linalg.norm(direction)
-        if norm > 1e-9:
-            direction /= norm
-        else:
-            # The Z1 workspace is predominantly in front of the base (+x).
-            # If the target is directly above/below the base, move the base
-            # backwards so the target enters that forward workspace.
-            direction = np.array([-1.0, 0.0])
-        shifts = np.arange(
-            0.0,
-            self.reachability_max_xy_shift + 0.5 * self.reachability_xy_step,
-            self.reachability_xy_step,
-        )
-
-        best = None
-        best_score = np.inf
-        for height in self.reachability_height_candidates:
-            for shift in shifts:
-                candidate_xy = current_xy + shift * direction
-                residual, collision_valid = self._planner_candidate(
-                    observation, target, candidate_xy, float(height)
-                )
-                score = residual + (0.0 if collision_valid else 10.0)
-                if score < best_score:
-                    best_score = score
-                    best = (candidate_xy.copy(), float(height), residual)
-                if (
-                    collision_valid
-                    and residual <= self.reachability_residual_threshold
-                ):
-                    print(
-                        "Reachability plan: "
-                        f"base_xy={np.round(candidate_xy, 3)}, "
-                        f"height={height:.3f}, residual={residual:.4f}"
-                    )
-                    return candidate_xy, float(height)
-
-        if best is None:
-            raise RuntimeError("Reachability planner produced no candidates")
+        self._set_motion_phase(PLANNING)
         print(
-            "Reachability fallback: "
-            f"base_xy={np.round(best[0], 3)}, height={best[1]:.3f}, "
-            f"residual={best[2]:.4f}"
+            f"CEM planning started in background for EE goal {goal_index}"
         )
-        return best[0], best[1]
 
-    def _activate_plan(self, observation):
-        self.planned_base_xy, self.planned_base_height = (
-            self._plan_base_reference(observation)
-        )
+    def _invalidate_base_plan(self):
+        """Invalidate pending/completed results after an EE goal change."""
+        self._planner_request_id += 1
+        self._planned_goal_index = -1
+        if (
+            self._planner_future is not None
+            and self._planner_future.cancel()
+        ):
+            self._planner_future = None
+            self._planner_future_request_id = None
+            self._planner_future_goal_index = None
+
+    def _apply_base_pose_plan(
+        self,
+        observation,
+        plan: BasePosePlan,
+        planning_seconds=None,
+    ):
+        """Atomically expose a completed plan to the main control thread."""
+        result = plan.cem_result
+        self.last_cem_result = result
+        self.planned_base_xy = np.asarray(plan.base_xy, dtype=float).copy()
+        self.planned_base_height = float(plan.base_height)
         self._planned_goal_index = self.goal_index
+        status = (
+            "feasible"
+            if result.metrics.get("feasible", False)
+            else "fallback"
+        )
+        timing = (
+            ""
+            if planning_seconds is None
+            else f", compute_time={1000.0 * planning_seconds:.1f} ms"
+        )
+        print(
+            f"CEM decision completed: goal={self.goal_index}, "
+            f"status={status}, "
+            f"base_xy={np.round(self.planned_base_xy, 3)}, "
+            f"height={self.planned_base_height:.3f}, "
+            f"residual={result.metrics.get('residual', np.inf):.4f}, "
+            f"cost={result.cost:.3f}, evaluations={result.evaluations}"
+            f"{timing}"
+        )
         xy_error = np.linalg.norm(
             self.planned_base_xy - np.asarray(observation[:2])
         )
@@ -333,6 +327,39 @@ class MPPI(WholeBodyArmMPPI):
             self.base_height_cmd = self.planned_base_height
             self._set_motion_phase(TRACK)
 
+    def _poll_background_plan(self, observation):
+        """Apply a ready current-goal result without waiting for the worker."""
+        if self._planned_goal_index == self.goal_index:
+            return True
+        if self._planner_future is None:
+            self._start_background_plan(observation)
+            return False
+        if not self._planner_future.done():
+            return False
+
+        future = self._planner_future
+        self._planner_future = None
+        self._planner_future_request_id = None
+        self._planner_future_goal_index = None
+        request_id, goal_index, plan, planning_seconds = future.result()
+        if (
+            request_id != self._planner_request_id
+            or goal_index != self.goal_index
+        ):
+            print(
+                "Discarded stale CEM plan: "
+                f"request={request_id}, goal={goal_index}"
+            )
+            self._start_background_plan(observation)
+            return False
+
+        self._apply_base_pose_plan(
+            observation,
+            plan,
+            planning_seconds=planning_seconds,
+        )
+        return True
+
     def _ramp_height(self, target_height):
         dt = float(self.model.opt.timestep)
         delta = np.clip(
@@ -348,7 +375,18 @@ class MPPI(WholeBodyArmMPPI):
             self.adaptive_gait_enabled
             and self._planned_goal_index != self.goal_index
         ):
-            self._activate_plan(observation)
+            plan_ready = self._poll_background_plan(observation)
+            if not plan_ready:
+                # CEM is running on private data. Keep a stationary reference
+                # so the main MPPI loop remains active and safe meanwhile.
+                self.body_ref[:2] = np.asarray(observation[:2], dtype=float)
+                self.body_ref[2] = self.base_height_cmd
+                self.body_ref[3:7] = np.array(
+                    [1.0, 0.0, 0.0, 0.0]
+                )
+                self.body_ref[7:13] = 0.0
+                self.base_height_rate_cmd = 0.0
+                return
 
         current_xy = np.asarray(observation[:2], dtype=float)
         if self.motion_phase == RECOVER:
@@ -424,7 +462,7 @@ class MPPI(WholeBodyArmMPPI):
         if self.goal_index < len(self.ee_goal_pos) - 1 and self.timer.done:
             transition_source = self.trajectory.copy()
             self.goal_index += 1
-            self._planned_goal_index = -1
+            self._invalidate_base_plan()
             initial_qpos = (
                 self.obs[:self.model.nq]
                 if self.obs is not None
@@ -466,6 +504,19 @@ class MPPI(WholeBodyArmMPPI):
             np.linalg.norm(position - target_pos) <= self.ee_pos_thresh
             and 1.0 - abs(float(np.dot(quat, target_quat))) <= self.ee_ori_thresh
         )
+
+    def close(self):
+        """Shut down the private CEM worker and the MPPI rollout workers."""
+        if (
+            hasattr(self, "base_planner_executor")
+            and not getattr(self, "_base_planner_closed", True)
+        ):
+            self.base_planner_executor.shutdown(
+                wait=True,
+                cancel_futures=True,
+            )
+            self._base_planner_closed = True
+        super().close()
 
     def update(self, obs):
         """Sample, rollout, score, and update the MPPI action trajectory."""

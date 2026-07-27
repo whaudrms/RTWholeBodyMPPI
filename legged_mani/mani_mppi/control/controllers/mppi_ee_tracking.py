@@ -25,7 +25,7 @@ class MPPI(WholeBodyArmMPPI):
     cost directly evaluates the MuJoCo end-effector pose.
     """
 
-    def __init__(self, task="locomani") -> None:
+    def __init__(self, task="ee_tracking") -> None:
         print("Task: ", task)
 
         # Load task targets and task-specific EE cost parameters.

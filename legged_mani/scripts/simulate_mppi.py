@@ -12,10 +12,6 @@ from mani_mppi.utils.tasks import get_task
 
 import argparse
 
-TASK_ALIASES = {
-    "ee_tracking": "locomani",
-}
-
 
 def main(task, viewer_render_rate=30.0, rollout_mode=None):
     T = 2000  # 20 seconds
@@ -33,8 +29,7 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
     
 
     # Get task data
-    task_name = TASK_ALIASES.get(task, task)
-    task_data = get_task(task_name)
+    task_data = get_task(task)
     sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
@@ -45,16 +40,16 @@ def main(task, viewer_render_rate=30.0, rollout_mode=None):
             )
     if task == "locomani":
         from mani_mppi.control.controllers.mppi_locomani import MPPI
-        agent = MPPI(task=task_name)
+        agent = MPPI(task=task)
     elif task == "ee_tracking":
         from mani_mppi.control.controllers.mppi_ee_tracking import MPPI
-        agent = MPPI(task=task_name)
+        agent = MPPI(task=task)
     elif task == "push_box":
         from mani_mppi.control.controllers.mppi_push_box import MPPI
-        agent = MPPI(task=task_name)
+        agent = MPPI(task=task)
     else:
         from mani_mppi.control.controllers.mppi_locomotion import MPPI
-        agent = MPPI(task=task_name, rollout_mode=rollout_mode)
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
     # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
     if viewer_render_rate <= 0:
         raise ValueError("viewer_render_rate must be positive")

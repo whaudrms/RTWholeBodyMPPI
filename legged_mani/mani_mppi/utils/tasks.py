@@ -47,7 +47,7 @@ TASKS = {
     },
     "big_box": {
         # Scale the Go1 big-box footprint and route by 1.5 for B2 while
-        # preserving the original climb approach and orientation profile.
+        # preserving the original climb approach and orientation profile. 
         "goal_pos": [[0, 0, STAND_BASE_HEIGHT],
                      [0.4 * BIG_BOX_SCALE, 0, STAND_BASE_HEIGHT],
                      [0.7 * BIG_BOX_SCALE, 0,
@@ -96,7 +96,8 @@ TASKS = {
             [0.85, 0.00, 0.30],
             [0.85, 0.00, 0.2],
             [1.0, 0.00, 0.48],
-            [1.5, 0.00, 0.80],
+            [1.5, 0.5, 0.80],
+            [0.0, 0.5, 0.40],
         ],
         # One [w, x, y, z] quaternion for each EE waypoint.
         "ee_goal_quat": [
@@ -105,17 +106,38 @@ TASKS = {
             [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
         ],
-        "ee_position_weight": 5000.0,
-        "ee_orientation_weight": 0.0, # no orientation tracking
-        "ee_terminal_scale": 5.0,
         "ee_pos_thresh": 0.03,
         "ee_ori_thresh": 1.0, # no orientation tracking
-        # Wait after reaching each waypoint before switching to the next one.
-        "waiting_times": [20, 20, 20, 20, 20],
+        "waiting_times": [20, 20, 20, 20, 20,20],
 
         "model_path": DEFAULT_MODEL_PATH,
         "config_path": "configs/mppi_locomani.yml",
+        "sim_path": DEFAULT_SIM_PATH,
+    },
+    "ee_tracking": {
+        "ee_site": "gripper_center",
+        # Independent copy of the EE waypoint sequence for the original
+        # fixed-body-reference tracker.
+        "ee_goal_pos": [
+            [0.85, 0.00, 0.80],
+            [0.85, 0.00, 0.40],
+            [1.00, 0.00, 0.5],
+            [1.30, 1.00, 0.80],
+        ],
+        "ee_goal_quat": [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+        ],
+        "ee_pos_thresh": 0.03,
+        "ee_ori_thresh": 1.0,
+        "waiting_times": [20, 20, 20, 20],
+
+        "model_path": DEFAULT_MODEL_PATH,
+        "config_path": "configs/mppi_ee_tracking.yml",
         "sim_path": DEFAULT_SIM_PATH,
     },
     "push_box": {
