@@ -20,7 +20,7 @@ Example
 -------
     python legged_mani/scripts/compare_mppi.py
     python legged_mani/scripts/compare_mppi.py --steps 1000
-    python legged_mani/scripts/compare_mppi.py --output /tmp/compare_mppi.png
+    python legged_mani/scripts/compare_mppi.py --output-dir /tmp/comparison
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
+from matplotlib.lines import Line2D
 from tqdm import tqdm
 
 
@@ -57,11 +58,21 @@ MODES = (
     "arm_fixed_ee_cost",
     "whole_body_mppi",
 )
-DEFAULT_OUTPUT = (
+COLORS = {
+    "arm_ik_nominal": "#E69F00",
+    "arm_fixed_ee_cost": "#009E73",
+    "whole_body_mppi": "#0072B2",
+}
+LABELS = {
+    "arm_ik_nominal": "Arm IK nominal",
+    "arm_fixed_ee_cost": "Arm fixed + EE cost",
+    "whole_body_mppi": "Whole-body MPPI",
+}
+DEFAULT_OUTPUT_DIR = (
     PACKAGE_ROOT
     / "mani_mppi"
     / "analysis"
-    / "compare_mppi_ee_tracking.png"
+    / "compare_ee_tracking"
 )
 
 
@@ -80,6 +91,8 @@ class RunLog:
     goal_index: np.ndarray
     qpos: np.ndarray
     qvel: np.ndarray
+    collision_safe_distance: float
+    collision_hard_distance: float
     task_success: bool
 
 
@@ -308,13 +321,15 @@ def run_mode(mode: str, steps: int) -> RunLog:
         goal_index=goal_index_log,
         qpos=qpos_log,
         qvel=qvel_log,
+        collision_safe_distance=float(agent.collision_safe_distance),
+        collision_hard_distance=float(agent.collision_hard_distance),
         task_success=bool(agent.task_success),
     )
 
 
-def save_tsv(log: RunLog, output: Path) -> Path:
-    """Save one mode's time series next to the comparison figure."""
-    path = output.with_name(f"{output.stem}_{log.mode}.tsv")
+def save_tsv(log: RunLog, output_dir: Path) -> Path:
+    """Save one mode's time series in the comparison output directory."""
+    path = output_dir / f"compare_mppi_ee_tracking_{log.mode}.tsv"
     data = np.column_stack(
         (
             log.time,
@@ -342,119 +357,425 @@ def save_tsv(log: RunLog, output: Path) -> Path:
     return path
 
 
-def transition_times(log: RunLog) -> np.ndarray:
-    """Return times at which the active EE goal changed."""
-    changes = np.flatnonzero(np.diff(log.goal_index) != 0) + 1
-    return log.time[changes]
+def rolling_median(values: np.ndarray, window: int) -> np.ndarray:
+    """Return a centered rolling median with edge padding."""
+    values = np.asarray(values, dtype=float)
+    if len(values) < 2 or window <= 1:
+        return values.copy()
+    window = min(int(window), len(values))
+    left = window // 2
+    right = window - 1 - left
+    padded = np.pad(values, (left, right), mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, window)
+    return np.median(windows, axis=-1)
 
 
-def plot_comparison(logs: list[RunLog], output: Path) -> None:
-    """Create a common six-panel comparison plot."""
-    colors = {
-        "arm_ik_nominal": "tab:orange",
-        "arm_fixed_ee_cost": "tab:green",
-        "whole_body_mppi": "tab:blue",
+def simulation_dt(log: RunLog) -> float:
+    """Return the median simulation sampling period."""
+    return (
+        float(np.median(np.diff(log.time)))
+        if len(log.time) > 1
+        else 0.01
+    )
+
+
+def goal_statistics(log: RunLog, goal: int) -> dict[str, float | bool]:
+    """Compute comparable metrics for one active-goal segment."""
+    indices = np.flatnonzero(log.goal_index == goal)
+    if not len(indices):
+        return {
+            "activated": False,
+            "completed": False,
+            "duration": np.nan,
+            "median": np.nan,
+            "p95": np.nan,
+            "rmse": np.nan,
+        }
+
+    errors = log.ee_error[indices]
+    last_goal = len(get_task(TASK)["ee_goal_pos"]) - 1
+    completed = (
+        bool(np.any(log.goal_index > goal))
+        if goal < last_goal
+        else log.task_success
+    )
+    duration = (
+        log.time[indices[-1]]
+        - log.time[indices[0]]
+        + simulation_dt(log)
+    )
+    return {
+        "activated": True,
+        "completed": completed,
+        "duration": float(duration),
+        "median": float(np.median(errors)),
+        "p95": float(np.percentile(errors, 95)),
+        "rmse": float(np.sqrt(np.mean(errors**2))),
     }
-    labels = {
-        "arm_ik_nominal": "Arm IK nominal (arm costs off)",
-        "arm_fixed_ee_cost": "Arm fixed + EE/collision costs",
-        "whole_body_mppi": "Whole-body MPPI",
-    }
+
+
+def mode_legend_handles() -> list[Line2D]:
+    """Create one shared, uncluttered legend for the three modes."""
+    return [
+        Line2D(
+            [0],
+            [0],
+            color=COLORS[mode],
+            linewidth=2.5,
+            label=LABELS[mode],
+        )
+        for mode in MODES
+    ]
+
+
+def plot_raw_and_smoothed(
+    axis,
+    x: np.ndarray,
+    y: np.ndarray,
+    mode: str,
+    smooth_window: int,
+) -> None:
+    """Show raw samples faintly and the rolling median prominently."""
+    axis.plot(
+        x,
+        y,
+        color=COLORS[mode],
+        linewidth=0.55,
+        alpha=0.16,
+    )
+    axis.plot(
+        x,
+        rolling_median(y, smooth_window),
+        color=COLORS[mode],
+        linewidth=2.0,
+    )
+
+
+def finish_figure(figure, axes, title: str) -> None:
+    """Apply common grid, title, and external mode legend styling."""
+    for axis in np.asarray(axes).ravel():
+        if axis.axison:
+            axis.grid(True, alpha=0.22)
+    figure.legend(
+        handles=mode_legend_handles(),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.965),
+        ncol=len(MODES),
+        frameon=False,
+    )
+    figure.suptitle(title, fontsize=15, y=0.997)
+    figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.925))
+
+
+def plot_summary(
+    logs: list[RunLog],
+    output: Path,
+    smooth_window: int,
+) -> None:
+    """Create the compact accuracy, completion-time, and latency summary."""
+    task_data = get_task(TASK)
+    threshold = float(task_data["ee_pos_thresh"])
+    num_goals = len(task_data["ee_goal_pos"])
+    figure, axes = plt.subplots(2, 2, figsize=(14, 9))
+
+    for log in logs:
+        plot_raw_and_smoothed(
+            axes[0, 0],
+            log.time,
+            np.maximum(log.ee_error, 1e-6),
+            log.mode,
+            smooth_window,
+        )
+    axes[0, 0].axhline(
+        threshold,
+        color="black",
+        linestyle=":",
+        linewidth=1.2,
+    )
+    axes[0, 0].set_yscale("log")
+    axes[0, 0].set_title("EE error overview (raw + rolling median)")
+    axes[0, 0].set_xlabel("simulation time [s]")
+    axes[0, 0].set_ylabel("position error [m]")
+
+    goals = np.arange(num_goals)
+    width = 0.24
+    max_duration = max(float(log.time[-1]) for log in logs)
+    for mode_index, log in enumerate(logs):
+        positions = goals + (mode_index - 1) * width
+        statistics = [
+            goal_statistics(log, int(goal))
+            for goal in goals
+        ]
+        durations = np.array(
+            [
+                stat["duration"] if stat["activated"] else 0.0
+                for stat in statistics
+            ],
+            dtype=float,
+        )
+        bars = axes[0, 1].bar(
+            positions,
+            durations,
+            width=width,
+            color=COLORS[log.mode],
+            alpha=0.82,
+        )
+        for bar, stat in zip(bars, statistics):
+            if not stat["activated"]:
+                axes[0, 1].text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    0.02 * max_duration,
+                    "NR",
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    rotation=90,
+                )
+            elif not stat["completed"]:
+                bar.set_hatch("//")
+                axes[0, 1].text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_height(),
+                    "timeout",
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    rotation=90,
+                )
+    axes[0, 1].set_title("Time spent on each goal")
+    axes[0, 1].set_xlabel("goal index")
+    axes[0, 1].set_ylabel("duration [s]")
+    axes[0, 1].set_xticks(goals)
+    axes[0, 1].set_ylim(
+        0.0,
+        max(
+            axes[0, 1].get_ylim()[1],
+            1.08 * max_duration,
+        ),
+    )
+
+    for mode_index, log in enumerate(logs):
+        statistics = [
+            goal_statistics(log, int(goal))
+            for goal in goals
+        ]
+        positions = goals + (mode_index - 1) * width
+        medians = np.asarray(
+            [stat["median"] for stat in statistics],
+            dtype=float,
+        )
+        p95 = np.asarray(
+            [stat["p95"] for stat in statistics],
+            dtype=float,
+        )
+        axes[1, 0].bar(
+            positions,
+            medians,
+            width=width,
+            yerr=np.maximum(p95 - medians, 0.0),
+            color=COLORS[log.mode],
+            alpha=0.82,
+            capsize=2,
+        )
+    axes[1, 0].axhline(
+        threshold,
+        color="black",
+        linestyle=":",
+        linewidth=1.2,
+    )
+    axes[1, 0].set_yscale("log")
+    axes[1, 0].set_title("Per-goal EE error: median with p95 whisker")
+    axes[1, 0].set_xlabel("goal index")
+    axes[1, 0].set_ylabel("position error [m]")
+    axes[1, 0].set_xticks(goals)
+
+    latency_data = [log.update_ms for log in logs]
+    box = axes[1, 1].boxplot(
+        latency_data,
+        tick_labels=[LABELS[mode] for mode in MODES],
+        showfliers=False,
+        patch_artist=True,
+    )
+    for patch, mode in zip(box["boxes"], MODES):
+        patch.set_facecolor(COLORS[mode])
+        patch.set_alpha(0.72)
+    axes[1, 1].set_title("Controller latency distribution")
+    axes[1, 1].set_ylabel("update time [ms]")
+    axes[1, 1].tick_params(axis="x", labelrotation=12)
+
+    finish_figure(
+        figure,
+        axes,
+        "EE tracking comparison summary",
+    )
+    figure.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+
+
+def plot_per_goal(
+    logs: list[RunLog],
+    output: Path,
+    smooth_window: int,
+) -> None:
+    """Plot EE error with time reset to zero at every goal activation."""
+    task_data = get_task(TASK)
+    targets = np.asarray(task_data["ee_goal_pos"], dtype=float)
+    threshold = float(task_data["ee_pos_thresh"])
+    columns = 3
+    rows = int(np.ceil((len(targets) + 1) / columns))
+    figure, axes = plt.subplots(
+        rows,
+        columns,
+        figsize=(16, 4.5 * rows),
+        squeeze=False,
+    )
+    flat_axes = axes.ravel()
+
+    for goal, target in enumerate(targets):
+        axis = flat_axes[goal]
+        for log in logs:
+            indices = np.flatnonzero(log.goal_index == goal)
+            if not len(indices):
+                continue
+            local_time = log.time[indices] - log.time[indices[0]]
+            plot_raw_and_smoothed(
+                axis,
+                local_time,
+                np.maximum(log.ee_error[indices], 1e-6),
+                log.mode,
+                smooth_window,
+            )
+        axis.axhline(
+            threshold,
+            color="black",
+            linestyle=":",
+            linewidth=1.1,
+        )
+        axis.set_yscale("log")
+        axis.set_title(
+            f"Goal {goal}: [{target[0]:.2f}, {target[1]:.2f}, "
+            f"{target[2]:.2f}]"
+        )
+        axis.set_xlabel("time since goal activation [s]")
+        axis.set_ylabel("EE error [m]")
+
+    encoding_axis = flat_axes[len(targets)]
+    encoding_axis.axis("off")
+    encoding_axis.text(
+        0.05,
+        0.78,
+        "Line encoding",
+        fontsize=12,
+        weight="bold",
+    )
+    encoding_axis.text(
+        0.05,
+        0.58,
+        "Faint: raw 100 Hz samples\n"
+        f"Bold: rolling median ({smooth_window} steps)\n"
+        "Dotted black: goal threshold",
+        fontsize=11,
+        linespacing=1.5,
+    )
+    for axis in flat_axes[len(targets) + 1 :]:
+        axis.axis("off")
+
+    finish_figure(
+        figure,
+        axes,
+        "Per-goal EE error aligned at goal activation",
+    )
+    figure.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+
+
+def plot_diagnostics(
+    logs: list[RunLog],
+    output: Path,
+    smooth_window: int,
+) -> None:
+    """Create uncluttered stability, safety, and control diagnostics."""
     figure, axes = plt.subplots(3, 2, figsize=(14, 12), sharex=True)
     axes = axes.ravel()
 
     for log in logs:
-        color = colors[log.mode]
-        label = labels[log.mode]
-        axes[0].plot(log.time, log.ee_error, color=color, label=label)
-        axes[1].plot(
-            log.time,
-            log.base_position[:, 0],
-            color=color,
-            label=f"{label} x",
+        planar_displacement = np.linalg.norm(
+            log.base_position[:, :2] - log.base_position[0, :2],
+            axis=1,
         )
-        axes[1].plot(
-            log.time,
-            log.base_position[:, 1],
-            color=color,
-            linestyle=":",
-            label=f"{label} y",
+        height_deviation = (
+            log.base_position[:, 2] - log.base_position[0, 2]
         )
-        axes[1].plot(
-            log.time,
-            log.base_position[:, 2],
-            color=color,
-            linestyle="--",
-            label=f"{label} z",
+        attitude_magnitude = np.max(
+            np.abs(np.rad2deg(log.roll_pitch)),
+            axis=1,
         )
-        axes[2].plot(
-            log.time,
-            np.rad2deg(log.roll_pitch[:, 0]),
-            color=color,
-            label=f"{label} roll",
-        )
-        axes[2].plot(
-            log.time,
-            np.rad2deg(log.roll_pitch[:, 1]),
-            color=color,
-            linestyle="--",
-            label=f"{label} pitch",
-        )
-        axes[3].plot(log.time, log.clearance, color=color, label=label)
-        axes[4].plot(log.time, log.action_delta, color=color, label=label)
-        axes[5].plot(log.time, log.update_ms, color=color, label=label)
-
-        for transition in transition_times(log):
-            axes[0].axvline(
-                transition,
-                color=color,
-                alpha=0.18,
-                linewidth=0.8,
+        for axis, values in zip(
+            axes[:5],
+            (
+                planar_displacement,
+                height_deviation,
+                attitude_magnitude,
+                log.clearance,
+                log.action_delta,
+            ),
+        ):
+            plot_raw_and_smoothed(
+                axis,
+                log.time,
+                values,
+                log.mode,
+                smooth_window,
             )
+        axes[5].step(
+            log.time,
+            log.goal_index,
+            where="post",
+            color=COLORS[log.mode],
+            linewidth=2.0,
+        )
 
-    axes[0].axhline(
-        get_task(TASK)["ee_pos_thresh"],
-        color="black",
-        linestyle=":",
-        label="goal threshold",
-    )
-    axes[0].set_title("End-effector position error")
-    axes[0].set_ylabel("error [m]")
-    axes[0].set_yscale("log")
-
-    axes[1].set_title("Base position")
-    axes[1].set_ylabel("position [m]")
-
-    axes[2].set_title("Base attitude")
-    axes[2].set_ylabel("angle [deg]")
+    axes[0].set_title("Planar base displacement")
+    axes[0].set_ylabel(r"$||(x,y)-(x_0,y_0)||$ [m]")
+    axes[1].axhline(0.0, color="black", linestyle=":", linewidth=0.9)
+    axes[1].set_title("Base height deviation")
+    axes[1].set_ylabel(r"$z-z_0$ [m]")
+    axes[2].set_title("Base attitude magnitude")
+    axes[2].set_ylabel(r"$\max(|roll|,|pitch|)$ [deg]")
 
     axes[3].axhline(
-        0.0,
+        logs[0].collision_safe_distance,
+        color="black",
+        linestyle="--",
+        linewidth=1.0,
+        label="safe distance",
+    )
+    axes[3].axhline(
+        logs[0].collision_hard_distance,
         color="black",
         linestyle=":",
-        linewidth=0.8,
+        linewidth=1.0,
+        label="hard distance",
     )
     axes[3].set_title("Minimum arm-to-torso clearance")
     axes[3].set_ylabel("clearance [m]")
+    axes[3].legend(fontsize=8)
 
     axes[4].set_title("Control variation")
     axes[4].set_ylabel(r"$||u_t-u_{t-1}||_2$")
-
-    axes[5].set_title("Controller computation time")
-    axes[5].set_ylabel("update [ms]")
-    axes[5].set_yscale("log")
-
-    for axis in axes:
-        axis.grid(True, alpha=0.25)
-        axis.legend(fontsize=8)
+    axes[5].set_title("Active goal timeline")
+    axes[5].set_ylabel("goal index")
+    axes[5].set_yticks(
+        np.arange(len(get_task(TASK)["ee_goal_pos"]))
+    )
     axes[4].set_xlabel("simulation time [s]")
     axes[5].set_xlabel("simulation time [s]")
 
-    figure.suptitle(
-        "EE tracking: IK nominal, fixed-arm EE cost, and whole-body MPPI",
-        fontsize=15,
+    finish_figure(
+        figure,
+        axes,
+        "EE tracking stability and safety diagnostics",
     )
-    figure.tight_layout()
     figure.savefig(output, dpi=180, bbox_inches="tight")
     plt.close(figure)
 
@@ -490,7 +811,7 @@ def replay_trajectories(
     playback_speed: float,
     replay_fps: float,
 ) -> None:
-    """Replay both saved trajectories sequentially in one MuJoCo viewer."""
+    """Replay all saved trajectories sequentially in one MuJoCo viewer."""
     import mujoco_viewer
 
     task_data = get_task(TASK)
@@ -569,10 +890,22 @@ def parse_args() -> argparse.Namespace:
         help="Simulation steps per mode (default: 2000 = 20 seconds)",
     )
     parser.add_argument(
-        "--output",
+        "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"Comparison PNG path (default: {DEFAULT_OUTPUT})",
+        default=DEFAULT_OUTPUT_DIR,
+        help=(
+            "Directory for PNG and TSV outputs "
+            f"(default: {DEFAULT_OUTPUT_DIR})"
+        ),
+    )
+    parser.add_argument(
+        "--smooth-window",
+        type=int,
+        default=20,
+        help=(
+            "Rolling-median window in simulation steps "
+            "(default: 20 = 0.2 seconds)"
+        ),
     )
     parser.add_argument(
         "--no-viewer",
@@ -594,8 +927,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.steps < 1:
         parser.error("--steps must be positive")
-    if args.output.suffix.lower() != ".png":
-        parser.error("--output must use a .png extension")
+    if args.smooth_window < 1:
+        parser.error("--smooth-window must be positive")
     if args.playback_speed <= 0.0:
         parser.error("--playback-speed must be positive")
     if args.replay_fps <= 0.0:
@@ -605,15 +938,36 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    output = args.output.expanduser().resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = args.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     logs = [run_mode(mode, args.steps) for mode in MODES]
     for log in logs:
         print_summary(log)
-        print(f"saved data: {save_tsv(log, output)}")
-    plot_comparison(logs, output)
-    print(f"saved plot: {output}")
+        print(f"saved data: {save_tsv(log, output_dir)}")
+
+    plot_paths = {
+        "summary": output_dir / "compare_mppi_summary.png",
+        "per_goal": output_dir / "compare_mppi_per_goal.png",
+        "diagnostics": output_dir / "compare_mppi_diagnostics.png",
+    }
+    plot_summary(
+        logs,
+        plot_paths["summary"],
+        args.smooth_window,
+    )
+    plot_per_goal(
+        logs,
+        plot_paths["per_goal"],
+        args.smooth_window,
+    )
+    plot_diagnostics(
+        logs,
+        plot_paths["diagnostics"],
+        args.smooth_window,
+    )
+    for name, path in plot_paths.items():
+        print(f"saved {name} plot: {path}")
     if not args.no_viewer:
         print(
             "starting MuJoCo replay: "
