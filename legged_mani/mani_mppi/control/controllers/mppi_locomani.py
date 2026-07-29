@@ -36,7 +36,9 @@ class MPPI(WholeBodyArmMPPI):
     cost directly evaluates the MuJoCo end-effector pose.
     """
 
-    def __init__(self, task="locomani") -> None:
+    def __init__(
+        self, task="locomani", rollout_mode="original_spline"
+    ) -> None:
         print("Task: ", task)
 
         # Load task targets and task-specific EE cost parameters.
@@ -65,6 +67,11 @@ class MPPI(WholeBodyArmMPPI):
             params = yaml.safe_load(stream)
         self.state_cost_weights = np.asarray(params["Q_diag"], dtype=float)
         self.control_cost_weights = np.asarray(params["R_diag"], dtype=float)
+        state_cost_dim = self.model.nq + self.model.nv - 1
+        if self.state_cost_weights.shape != (state_cost_dim,):
+            raise ValueError(
+                f"Q_diag must contain {state_cost_dim} compact state weights"
+            )
         self.Q = np.diag(self.state_cost_weights)
         self.R = np.diag(self.control_cost_weights)
         self.ee_position_weight = float(params["ee_position_weight"])
@@ -76,6 +83,7 @@ class MPPI(WholeBodyArmMPPI):
             raise ValueError("ee_terminal_scale must be non-negative")
         self.cost_func = self.calculate_total_cost
         self.nominal_from_gait = bool(params.get("nominal_from_gait", True))
+        self._configure_rollout_mode(rollout_mode)
         self.gait_startup_blend_steps = int(
             params.get("gait_startup_blend_steps", 50)
         )
@@ -216,6 +224,7 @@ class MPPI(WholeBodyArmMPPI):
         print(f"Body reference keyframe: {body_keyframe}")
         print(f"Initial EE goal: {self.ee_goal_pos[0]}")
         print(f"IK arm reference: {np.round(self.arm_reference, 4)}")
+        print(f"Rollout mode: {self.rollout_mode} ({self.sample_type})")
 
     def _set_gait(self, gait_name):
         """Switch gait banks without resetting the shared phase."""
@@ -652,7 +661,7 @@ class MPPI(WholeBodyArmMPPI):
         actions = self.perturb_action()
         # Keep one noise-free gait/IK candidate so rejection cannot eliminate
         # the nominal merely because every sampled perturbation is unsafe.
-        actions[0] = np.clip(self.trajectory, self.act_min, self.act_max)
+        actions[0] = self._noise_free_rollout_candidate()
         rollout_states = self.rollout_func(self.obs, actions)
         self.joints_ref = self._joint_reference()
         nominal_actions = self.joints_ref[:self.act_dim].T
@@ -714,29 +723,18 @@ class MPPI(WholeBodyArmMPPI):
             self.trajectory[-1] = updated_actions[-1]
         return updated_actions[0]
 
-    def quaternion_distance_np(self, q1, q2):
-        return 1.0 - np.abs(np.einsum("ij,ij->i", q1, q2))
-
     def quadruped_cost_np(self, x, u, x_ref):
         """Compute joint/base state cost and actuator-consistent control cost."""
         kp = np.asarray(self.model.actuator_gainprm[:, 0], dtype=float)
         kd = -np.asarray(self.model.actuator_biasprm[:, 2], dtype=float)
-        x_error = x - x_ref
+        x_error = self._compact_robot_state_error(x, x_ref)
         x_joint = x[:, 7:23]
         v_joint = x[:, 29:45]
         v_ref = x_ref[:, 29:45]
         u_error = kp * (u - x_joint) - kd * (v_joint)
 
-        # Q slots 0:7 represent [base_x, base_y, base_z, roll, pitch, yaw, unused].
         # Keep base x/y active when configured so an in-place gait cannot
         # reduce joint/EE cost by drifting away from the standing location.
-        body_rp = self._quat_to_roll_pitch(x[:, 3:7])
-        body_rp_ref = self._quat_to_roll_pitch(x_ref[:, 3:7])
-        body_rp_error = body_rp - body_rp_ref
-        x_error[:, 3] = body_rp_error[:, 0]
-        x_error[:, 4] = body_rp_error[:, 1]
-        x_error[:, 5:7] = 0.0
-
         return (
             np.sum(x_error * x_error * self.state_cost_weights[None, :], axis=1)
             + np.sum(

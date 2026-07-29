@@ -33,7 +33,9 @@ class MPPI(WholeBodyArmMPPI):
     box-surface EE target, arm/torso clearance, and box position error.
     """
 
-    def __init__(self, task="push_box") -> None:
+    def __init__(
+        self, task="push_box", rollout_mode="original_spline"
+    ) -> None:
         print("Task: ", task)
         if task != "push_box":
             raise ValueError("MPPI push-box controller only supports task='push_box'")
@@ -48,6 +50,7 @@ class MPPI(WholeBodyArmMPPI):
         super().__init__(model_path, config_path)
 
         robot_state_dim = (self.model.nq - 7) + (self.model.nv - 6)
+        robot_cost_dim = robot_state_dim - 1
         self.state_cost_weights = np.asarray(params["Q_diag"], dtype=float)
         self.box_cost_weights = np.asarray(params["Q_box"], dtype=float)
         self.control_cost_weights = np.asarray(params["R_diag"], dtype=float)
@@ -58,9 +61,9 @@ class MPPI(WholeBodyArmMPPI):
         self.box_orientation_violation_penalty = float(
             params["box_orientation_violation_penalty"]
         )
-        if self.state_cost_weights.shape != (robot_state_dim,):
+        if self.state_cost_weights.shape != (robot_cost_dim,):
             raise ValueError(
-                f"Q_diag must contain {robot_state_dim} robot-state weights"
+                f"Q_diag must contain {robot_cost_dim} compact state weights"
             )
         if self.box_cost_weights.shape != (3,):
             raise ValueError("Q_box must contain three box-position weights")
@@ -84,6 +87,7 @@ class MPPI(WholeBodyArmMPPI):
         self.ee_terminal_scale = float(params["ee_terminal_scale"])
 
         self.nominal_from_gait = bool(params.get("nominal_from_gait", True))
+        self._configure_rollout_mode(rollout_mode)
         self.gait_startup_blend_steps = int(
             params.get("gait_startup_blend_steps", 50)
         )
@@ -286,6 +290,7 @@ class MPPI(WholeBodyArmMPPI):
         print(f"Box target: {np.round(self.x_box_ref, 4)}")
         print(f"Initial EE contact target: {np.round(self.ee_target_pos, 4)}")
         print(f"IK arm reference: {np.round(self.arm_reference, 4)}")
+        print(f"Rollout mode: {self.rollout_mode} ({self.sample_type})")
 
     def _split_observation(self, observation):
         """Split [qpos, qvel] into canonical robot and free-box states."""
@@ -829,7 +834,7 @@ class MPPI(WholeBodyArmMPPI):
         actions = self.perturb_action()
         # Keep one noise-free gait/IK candidate so rejection cannot eliminate
         # the nominal merely because every sampled perturbation is unsafe.
-        actions[0] = np.clip(self.trajectory, self.act_min, self.act_max)
+        actions[0] = self._noise_free_rollout_candidate()
         rollout_states = self.rollout_func(self.obs, actions)
         self.joints_ref = self._joint_reference()
         nominal_actions = self.joints_ref[:self.act_dim].T
@@ -896,17 +901,10 @@ class MPPI(WholeBodyArmMPPI):
         kp = np.asarray(self.model.actuator_gainprm[:, 0], dtype=float)
         kd = -np.asarray(self.model.actuator_biasprm[:, 2], dtype=float)
 
-        x_error = x_robot - x_robot_ref
+        x_error = self._compact_robot_state_error(x_robot, x_robot_ref)
         x_joint = x_robot[:, 7:23]
         v_joint = x_robot[:, 29:45]
         u_error = kp * (u - x_joint) - kd * v_joint
-
-        body_rp = self._quat_to_roll_pitch(x_robot[:, 3:7])
-        body_rp_ref = self._quat_to_roll_pitch(x_robot_ref[:, 3:7])
-        body_rp_error = body_rp - body_rp_ref
-        x_error[:, 3] = body_rp_error[:, 0]
-        x_error[:, 4] = body_rp_error[:, 1]
-        x_error[:, 5:7] = 0.0
 
         return (
             np.sum(

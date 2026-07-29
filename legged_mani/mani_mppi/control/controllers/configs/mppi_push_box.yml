@@ -140,13 +140,12 @@ gait_noise_scale:
 # ============================
 # Diagonal entries of the state cost matrix Q.
 Q_diag:
-  # Torso task error: [x, y, z, roll, pitch, yaw, unused].
+  # Compact state error: [base xyz, RPY, joint q, base velocity, joint velocity].
   - 3000.0
   - 3000.0
   - 1500.0
   - 5000.0
   - 3000.0
-  - 0.0
   - 0.0
   # Leg and arm joint positions
   - 500.0

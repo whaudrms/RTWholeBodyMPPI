@@ -57,6 +57,124 @@ class WholeBodyArmMPPI(BaseMPPI):
     functions so the MPPI flow remains visible where each task is defined.
     """
 
+    def _configure_rollout_mode(self, rollout_mode) -> None:
+        """Select one of the shared gait/action warm-start samplers."""
+        rollout_modes = (
+            None,
+            "noise_spline",
+            "original",
+            "original_spline",
+            "safe_spline",
+        )
+        if rollout_mode not in rollout_modes:
+            raise ValueError(
+                "rollout_mode must be None, 'noise_spline', 'original', "
+                "'original_spline', or 'safe_spline'"
+            )
+        if rollout_mode == "noise_spline":
+            self.nominal_from_gait = True
+            self.sample_type = "cubic"
+        elif rollout_mode == "original":
+            self.nominal_from_gait = False
+            self.sample_type = "cubic_original"
+        elif rollout_mode == "original_spline":
+            self.nominal_from_gait = True
+            self.sample_type = "cubic_gait_absolute"
+        elif rollout_mode == "safe_spline":
+            self.nominal_from_gait = True
+            self.sample_type = "cubic_gait_residual"
+        self.rollout_mode = rollout_mode or "configured"
+
+    def _rollout_spline_indices(self):
+        """Return unique, horizon-aligned knot indices for spline modes."""
+        indices = np.rint(
+            np.linspace(0, self.horizon - 1, self.n_knots)
+        ).astype(int)
+        if len(indices) < 2:
+            raise ValueError("n_knots must be at least 2 for spline sampling")
+        if len(np.unique(indices)) != len(indices):
+            raise ValueError(
+                "n_knots must not produce duplicate horizon indices"
+            )
+        return indices
+
+    def _sample_gait_absolute_spline(self):
+        """Spline the complete gait/IK/residual warm start plus knot noise."""
+        from scipy.interpolate import CubicSpline
+
+        indices = self._rollout_spline_indices()
+        noise = self.generate_noise(
+            (self.n_samples, len(indices), self.act_dim)
+        )
+        knot_actions = self.trajectory[indices][None, :, :] + noise
+        actions = CubicSpline(indices, knot_actions, axis=1)(
+            np.arange(self.horizon)
+        )
+        return np.clip(actions, self.act_min, self.act_max)
+
+    def _sample_gait_residual_spline(self):
+        """Preserve gait/IK and spline only residuals plus knot noise."""
+        from scipy.interpolate import CubicSpline
+
+        indices = self._rollout_spline_indices()
+        noise = self.generate_noise(
+            (self.n_samples, len(indices), self.act_dim)
+        )
+        knot_corrections = self.gait_correction[indices][None, :, :] + noise
+        smooth_corrections = CubicSpline(
+            indices, knot_corrections, axis=1
+        )(np.arange(self.horizon))
+        actions = self.gait_nominal[None, :, :] + smooth_corrections
+        return np.clip(actions, self.act_min, self.act_max)
+
+    def perturb_action(self):
+        """Generate candidates according to the selected rollout mode."""
+        if getattr(self, "rollout_mode", None) == "original_spline":
+            return self._sample_gait_absolute_spline()
+        if getattr(self, "rollout_mode", None) == "safe_spline":
+            return self._sample_gait_residual_spline()
+        return super().perturb_action()
+
+    def _noise_free_rollout_candidate(self):
+        """Return a mode-consistent baseline for collision-safe sampling."""
+        from scipy.interpolate import CubicSpline
+
+        mode = getattr(self, "rollout_mode", None)
+        if mode not in {"original_spline", "safe_spline"}:
+            return np.clip(self.trajectory, self.act_min, self.act_max)
+
+        indices = self._rollout_spline_indices()
+        if mode == "original_spline":
+            candidate = CubicSpline(
+                indices, self.trajectory[indices], axis=0
+            )(np.arange(self.horizon))
+        else:
+            smooth_correction = CubicSpline(
+                indices, self.gait_correction[indices], axis=0
+            )(np.arange(self.horizon))
+            candidate = self.gait_nominal + smooth_correction
+        return np.clip(candidate, self.act_min, self.act_max)
+
+    def _compact_robot_state_error(self, states, references):
+        """Return the 44-D robot error without a dummy quaternion slot."""
+        raw_error = states - references
+        body_rp = self._quat_to_roll_pitch(states[:, 3:7])
+        body_rp_ref = self._quat_to_roll_pitch(references[:, 3:7])
+        body_rpy_error = np.column_stack(
+            (
+                body_rp - body_rp_ref,
+                np.zeros(len(states), dtype=float),
+            )
+        )
+        return np.concatenate(
+            (
+                raw_error[:, :3],
+                body_rpy_error,
+                raw_error[:, 7:],
+            ),
+            axis=1,
+        )
+
     def _configure_arm_system(
         self,
         params: dict,

@@ -39,16 +39,21 @@ class MPPI(BaseMPPI):
         - MPPI sampling and cost calculation configurations.
     """
 
-    def __init__(self, task='stand', rollout_mode=None) -> None:
+    def __init__(self, task='stand', rollout_mode='original_spline') -> None:
         """
         Initialize the MPPI controller with task-specific configurations.
 
         Args:
             task (str): The name of the task ('stand', 'walk').
-            rollout_mode (str | None): ``gait`` keeps the phase-aligned gait
-                nominal. ``original`` reproduces the original Go1 MPPI
-                previous-solution and absolute-cubic sampling behavior. None
-                uses the task configuration unchanged.
+            rollout_mode (str | None): Sampling strategy for the rollout
+                controls. ``noise_spline`` interpolates only exploration noise
+                around the full-rate gait/residual warm start. ``original``
+                uses the previous absolute solution without a gait sampling
+                prior. ``original_spline`` applies the original absolute
+                spline to the gait/residual warm start and is the default.
+                ``safe_spline`` preserves the full-rate gait reference and
+                splines only residuals plus exploration noise. None uses the
+                task configuration unchanged.
         """
         print("Task: ", task)
 
@@ -76,20 +81,40 @@ class MPPI(BaseMPPI):
         with open(CONFIG_PATH, 'r') as file:
             params = yaml.safe_load(file)
         # Cost weights
-        self.Q = np.diag(np.array(params['Q_diag']))
+        state_cost_weights = np.asarray(params['Q_diag'], dtype=float)
+        state_cost_dim = self.model.nq + self.model.nv - 1
+        if state_cost_weights.shape != (state_cost_dim,):
+            raise ValueError(
+                f"Q_diag must contain {state_cost_dim} compact state weights"
+            )
+        self.Q = np.diag(state_cost_weights)
         self.R = np.diag(np.array(params['R_diag']))
         self.cost_func = self.calculate_total_cost
         self.nominal_from_gait = bool(params.get('nominal_from_gait', True))
-        if rollout_mode not in (None, 'gait', 'original'):
+        rollout_modes = (
+            None,
+            'noise_spline',
+            'original',
+            'original_spline',
+            'safe_spline',
+        )
+        if rollout_mode not in rollout_modes:
             raise ValueError(
-                "rollout_mode must be None, 'gait', or 'original'"
+                "rollout_mode must be None, 'noise_spline', 'original', "
+                "'original_spline', or 'safe_spline'"
             )
-        if rollout_mode == 'gait':
+        if rollout_mode == 'noise_spline':
             self.nominal_from_gait = True
             self.sample_type = 'cubic'
         elif rollout_mode == 'original':
             self.nominal_from_gait = False
             self.sample_type = 'cubic_original'
+        elif rollout_mode == 'original_spline':
+            self.nominal_from_gait = True
+            self.sample_type = 'cubic_gait_absolute'
+        elif rollout_mode == 'safe_spline':
+            self.nominal_from_gait = True
+            self.sample_type = 'cubic_gait_residual'
         self.rollout_mode = rollout_mode or 'configured'
         self.gait_startup_blend_steps = int(
             params.get('gait_startup_blend_steps', 50)
@@ -131,6 +156,56 @@ class MPPI(BaseMPPI):
         print(f"Initial goal {self.goal_index}: {self.goal_pos[self.goal_index] }")
         print(f"Initial gait {self.desired_gait[self.goal_index]}")
         print(f"Rollout mode: {self.rollout_mode} ({self.sample_type})")
+
+    def _rollout_spline_indices(self):
+        """Return unique, horizon-aligned knot indices for spline modes."""
+        indices = np.rint(
+            np.linspace(0, self.horizon - 1, self.n_knots)
+        ).astype(int)
+        if len(indices) < 2:
+            raise ValueError("n_knots must be at least 2 for spline sampling")
+        if len(np.unique(indices)) != len(indices):
+            raise ValueError(
+                "n_knots must not produce duplicate horizon indices"
+            )
+        return indices
+
+    def _sample_gait_absolute_spline(self):
+        """Spline the complete gait/residual warm start plus knot noise."""
+        from scipy.interpolate import CubicSpline
+
+        indices = self._rollout_spline_indices()
+        noise = self.generate_noise(
+            (self.n_samples, len(indices), self.act_dim)
+        )
+        knot_actions = self.trajectory[indices][None, :, :] + noise
+        actions = CubicSpline(indices, knot_actions, axis=1)(
+            np.arange(self.horizon)
+        )
+        return np.clip(actions, self.act_min, self.act_max)
+
+    def _sample_gait_residual_spline(self):
+        """Preserve the gait and spline only warm residuals plus knot noise."""
+        from scipy.interpolate import CubicSpline
+
+        indices = self._rollout_spline_indices()
+        noise = self.generate_noise(
+            (self.n_samples, len(indices), self.act_dim)
+        )
+        knot_corrections = self.gait_correction[indices][None, :, :] + noise
+        smooth_corrections = CubicSpline(
+            indices, knot_corrections, axis=1
+        )(np.arange(self.horizon))
+        actions = self.gait_nominal[None, :, :] + smooth_corrections
+        return np.clip(actions, self.act_min, self.act_max)
+
+    def perturb_action(self):
+        """Generate candidates according to the selected rollout mode."""
+        if getattr(self, 'rollout_mode', None) == 'original_spline':
+            return self._sample_gait_absolute_spline()
+        if getattr(self, 'rollout_mode', None) == 'safe_spline':
+            return self._sample_gait_residual_spline()
+        return super().perturb_action()
     
     def next_goal(self):
         """
@@ -368,16 +443,20 @@ class MPPI(BaseMPPI):
         kp = np.asarray(self.model.actuator_gainprm[:, 0], dtype=float)
         kd = -np.asarray(self.model.actuator_biasprm[:, 2], dtype=float)
 
-        # Compute state error relative to the reference
-        x_error = x - x_ref
-
-        # Store the relative rotation vector in the quaternion slots so that
-        # Q_diag[4:7] independently weights roll, pitch, and yaw errors.
+        raw_state_error = x - x_ref
         rotation_error = self.quaternion_rotation_error_np(
             x[:, 3:7], x_ref[:, 3:7]
         )
-        x_error[:, 3] = 0.0
-        x_error[:, 4:7] = rotation_error
+        # Remove the unused quaternion-scalar cost slot. The compact layout is
+        # [base xyz, rotation xyz, joint q, base velocity, joint velocity].
+        x_error = np.concatenate(
+            (
+                raw_state_error[:, :3],
+                rotation_error,
+                raw_state_error[:, 7:],
+            ),
+            axis=1,
+        )
 
         # Compute joint and velocity errors
         x_joint = x[:, 7:23]

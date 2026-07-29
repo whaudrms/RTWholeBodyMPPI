@@ -38,7 +38,7 @@ TASKS = {
                         0.2],
         "desired_gait": ['in_place', 
                          'walk_fast', 
-                         'in_place'],
+                         'walk_fast'],
         "waiting_times": [0, 
                           0, 
                           0],

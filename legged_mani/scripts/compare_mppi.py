@@ -173,8 +173,8 @@ def freeze_arm_to_ik_nominal(agent: MPPI) -> np.ndarray:
 
     # State layout is [base pose 7, joint q 16, base velocity 6,
     # joint dq 16]. Remove the four arm joint position/velocity weights.
-    arm_q_weights = 7 + arm_indices
-    arm_dq_weights = 29 + arm_indices
+    arm_q_weights = 6 + arm_indices
+    arm_dq_weights = 28 + arm_indices
     agent.state_cost_weights[arm_q_weights] = 0.0
     agent.state_cost_weights[arm_dq_weights] = 0.0
     agent.control_cost_weights[arm_indices] = 0.0

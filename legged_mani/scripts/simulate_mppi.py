@@ -16,7 +16,7 @@ import argparse
 def main(
     task,
     viewer_render_rate=30.0,
-    rollout_mode=None,
+    rollout_mode="original_spline",
     plot=False,
     headless=False,
 ):
@@ -39,20 +39,15 @@ def main(
     sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
-    if task in {"locomani", "ee_tracking", "push_box"}:
-        if rollout_mode is not None:
-            raise ValueError(
-                "--rollout-mode is currently available for locomotion tasks only"
-            )
     if task == "locomani":
         from mani_mppi.control.controllers.mppi_locomani import MPPI
-        agent = MPPI(task=task)
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
     elif task == "ee_tracking":
         from mani_mppi.control.controllers.mppi_ee_tracking import MPPI
-        agent = MPPI(task=task)
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
     elif task == "push_box":
         from mani_mppi.control.controllers.mppi_push_box import MPPI
-        agent = MPPI(task=task)
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
     else:
         from mani_mppi.control.controllers.mppi_locomotion import MPPI
         agent = MPPI(task=task, rollout_mode=rollout_mode)
@@ -94,11 +89,20 @@ if __name__ == "__main__":
         help='Viewer frames per simulated second (default: 30).',
     )
     parser.add_argument(
-        '--rollout-mode', choices=('gait', 'original'), default=None,
+        '--rollout-mode',
+        choices=(
+            'noise_spline',
+            'original',
+            'original_spline',
+            'safe_spline',
+        ),
+        default='original_spline',
         help=(
-            'Override locomotion rollout sampling: gait uses the current '
-            'gait-residual method; original uses previous-solution absolute '
-            'cubic sampling.'
+            'Select MPPI rollout sampling (default: original_spline): '
+            'noise_spline interpolates only noise around the gait residual; '
+            'original uses previous-solution absolute cubic sampling; '
+            'original_spline splines the complete gait warm start; '
+            'safe_spline preserves the gait and splines residuals.'
         ),
     )
     parser.add_argument(
