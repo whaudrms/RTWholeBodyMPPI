@@ -8,7 +8,8 @@ dt: 0.01          # Time step size for simulation (in seconds).
 n_samples: 30     # Number of trajectory samples per iteration.
 lambda: 0.1       # Temperature parameter for trajectory cost weighting.
 horizon: 40       # Prediction horizon (number of time steps).
-n_workers: 5      # Number of parallel workers for optimization.
+n_workers: 15    # Tuned for persistent parallel MuJoCo rollouts on this CPU.
+rollout_chunk_size: 1  # Dynamically schedule one sampled trajectory per task.
 seed: 42          # Random seed for reproducibility.
 
 # Use the phase-aligned gait as the MPPI action prior.  The optimizer then

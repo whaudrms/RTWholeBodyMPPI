@@ -53,6 +53,9 @@ class BaseMPPI:
         self.horizon = int(self.params["horizon"])
         self.n_samples = int(self.params["n_samples"])
         self.num_workers = max(1, min(int(self.params["n_workers"]), self.n_samples))
+        self.rollout_chunk_size = int(self.params.get("rollout_chunk_size", 1))
+        if self.rollout_chunk_size < 1:
+            raise ValueError("rollout_chunk_size must be at least 1")
         self.sample_type = self.params.get("sample_type", "normal")
         self.n_knots = int(self.params.get("n_knots", 4))
         self.random_generator = np.random.default_rng(self.params.get("seed", 42))
@@ -271,14 +274,13 @@ class BaseMPPI:
         initial = np.repeat(
             np.concatenate(([0.0], observation))[None, :], n_rollouts, axis=0
         )
-        n_workers = min(self.num_workers, n_rollouts)
-        boundaries = np.linspace(
-            0, n_rollouts, n_workers + 1, dtype=int
-        )
+        # Submit small chunks to the persistent worker pool instead of
+        # assigning one fixed block to each worker. Contact-rich samples can
+        # take substantially longer than contact-free samples, so dynamic
+        # queueing prevents an idle worker from waiting for one slow block.
         chunks = [
-            slice(start, stop)
-            for start, stop in zip(boundaries[:-1], boundaries[1:])
-            if stop > start
+            slice(start, min(start + self.rollout_chunk_size, n_rollouts))
+            for start in range(0, n_rollouts, self.rollout_chunk_size)
         ]
         futures = [
             self.executor.submit(
