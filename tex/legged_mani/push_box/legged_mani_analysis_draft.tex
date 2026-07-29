@@ -1,0 +1,880 @@
+% !TeX program = pdflatex
+\documentclass[11pt,a4paper]{article}
+
+% Compile with pdfLaTeX:
+%   latexmk -pdf legged_mani_analysis_draft.tex
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\geometry{margin=2.4cm}
+\emergencystretch=1em
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  urlcolor=blue!55!black,
+  citecolor=blue!55!black
+}
+\setcounter{tocdepth}{2}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\sqnorm}[1]{\left\lVert #1 \right\rVert^2}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\sat}{\operatorname{sat}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\code{legged\_mani}: B2--Z1 Push-Box Controller\\
+Mathematical Formulation and Implementation Analysis}
+\author{Notes based on analysis of the \code{legged\_mani} codebase}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{Scope and Executive Summary}
+%=============================================================================
+
+This document analyzes the \code{push\_box} task implemented by
+\path{control/controllers/mppi_push_box.py}. The controller moves a free box
+toward a fixed world-frame goal with the end effector (EE) of a four-degree-
+of-freedom Unitree Z1 arm mounted on a Unitree B2 quadruped. The analysis is
+based primarily on:
+\begin{itemize}
+  \item push-box task logic and rollout cost:
+        \path{control/controllers/mppi_push_box.py},
+  \item shared sampling and whole-body support:
+        \path{control/controllers/base_controller.py} and
+        \path{control/controllers/whole_body_arm_controller.py},
+  \item kinematic base-pose planning:
+        \path{control/planning/base_pose_cem.py},
+  \item task and controller parameters:
+        \path{utils/tasks.py} and \path{configs/mppi_push_box.yml},
+  \item rollout and simulation models:
+        \path{models/b2_z1_base_push_box.xml} and
+        \path{models/scene_push_box.xml}.
+\end{itemize}
+
+The controller combines two optimizers with different roles:
+\begin{enumerate}
+  \item A background cross-entropy method (CEM) searches a three-dimensional
+        kinematic base-pose reference
+        $[\Delta x_b,\Delta y_b,z_b]^\top$ that makes the moving box-contact
+        point reachable.
+  \item Whole-body MPPI samples 16-dimensional desired joint-position
+        trajectories and evaluates their full robot--box contact dynamics in
+        parallel MuJoCo rollouts.
+\end{enumerate}
+The CEM result is only a reference. MPPI remains the sole dynamic trajectory
+optimizer. Its cost combines robot state tracking, virtual PD effort, box
+position and tilt, moving EE-to-box contact tracking, and arm--torso
+clearance. The contact point changes from a pre-contact point outside the box
+to a small virtual penetration inside the pushing face after engagement.
+
+%=============================================================================
+\section{Robot, Box, State, and Input}
+%=============================================================================
+
+\subsection{Degrees of Freedom}
+
+The push-box model contains the 23 robot position coordinates and 22 robot
+velocity coordinates of the B2--Z1 system, plus a seven-coordinate free-joint
+pose and six velocities for the box:
+\begin{equation}
+  n_q=30,\qquad n_v=28,\qquad n_u=16.
+\end{equation}
+The actuated coordinates are the twelve B2 leg joints and the first four Z1
+arm joints:
+\begin{align*}
+\bm{q}_j = [&q_{\mathrm{FR,h}},q_{\mathrm{FR,t}},q_{\mathrm{FR,c}},
+q_{\mathrm{FL,h}},q_{\mathrm{FL,t}},q_{\mathrm{FL,c}},\\
+&q_{\mathrm{RR,h}},q_{\mathrm{RR,t}},q_{\mathrm{RR,c}},
+q_{\mathrm{RL,h}},q_{\mathrm{RL,t}},q_{\mathrm{RL,c}},
+q_{a1},q_{a2},q_{a3},q_{a4}]^\top .
+\end{align*}
+Here $\mathrm{h}$, $\mathrm{t}$, and $\mathrm{c}$ denote hip, thigh, and calf.
+
+\subsection{Observation State}
+
+The controller receives the complete MuJoCo state
+$[\bm{q}_{\mathrm{pos}}^\top,\bm{q}_{\mathrm{vel}}^\top]^\top$ and separates
+it into a canonical 45-dimensional robot state and a 13-dimensional box
+state:
+\begin{equation}
+  \boxed{
+  \bm{x}=
+  \begin{bmatrix}
+    \bm{x}_r\\
+    \bm{x}_o
+  \end{bmatrix}
+  \in\R^{58},}
+\end{equation}
+\begin{equation}
+  \bm{x}_r=
+  \begin{bmatrix}
+    \bm{p}_b\\
+    \bm{q}_b\\
+    \bm{q}_j\\
+    \bm{v}_b\\
+    \bm{\omega}_b\\
+    \dot{\bm{q}}_j
+  \end{bmatrix}
+  \in\R^{45},
+  \qquad
+  \bm{x}_o=
+  \begin{bmatrix}
+    \bm{p}_o\\
+    \bm{q}_o\\
+    \bm{v}_o\\
+    \bm{\omega}_o
+  \end{bmatrix}
+  \in\R^{13}.
+\end{equation}
+The base and box quaternions use MuJoCo's scalar-first convention
+$[q_w,q_x,q_y,q_z]^\top$. The robot state is formed by excluding the box
+free-joint indices from the full arrays; the box state is extracted using the
+\code{box\_joint} position and velocity addresses. This is safer than assuming
+that the two subsystems always occupy fixed contiguous blocks.
+
+The MuJoCo FULLPHYSICS rollout buffer additionally stores time:
+\begin{equation}
+  [t,\bm{q}_{\mathrm{pos}}^\top,\bm{q}_{\mathrm{vel}}^\top]^\top
+  \in\R^{59}.
+\end{equation}
+The leading time element is removed before cost evaluation, leaving the
+58-dimensional observation above.
+
+\subsection{Control Input and Actuator Model}
+
+The optimized input is a vector of desired joint positions, not joint torques
+or contact forces:
+\begin{equation}
+  \boxed{\bm{u}=\bm{q}_{j,\mathrm{des}}\in\R^{16}},
+  \qquad
+  u_i^{\mathrm{clip}}=\sat_{[u_i^-,u_i^+]}(u_i).
+\end{equation}
+Each affine MuJoCo position actuator then computes
+\begin{align}
+  \tau_i^{\mathrm{unsat}}
+  &=k_{p,i}(u_i^{\mathrm{clip}}-q_{j,i})
+    -k_{d,i}\dot q_{j,i},\\
+  \tau_i^{\mathrm{MJ}}
+  &=\sat_{[\tau_i^-,\tau_i^+]}
+    \left(\tau_i^{\mathrm{unsat}}\right).
+\end{align}
+The hip actuators use $(k_p,k_d)=(100,5)$, the thigh and calf actuators use
+$(300,8)$, and the four arm actuators use $(300,5)$. Desired positions are
+clipped by the sampler, while MuJoCo applies the separate actuator-force
+limits.
+
+%=============================================================================
+\section{Prediction Dynamics and Contact}
+%=============================================================================
+
+\subsection{Discrete MuJoCo Dynamics}
+
+One prediction step is the full contact-rich transition
+\begin{equation}
+  \boxed{
+  \bm{x}_{k+1}
+  =F_{\mathrm{MJ}}(\bm{x}_k,\bm{u}_k;
+                    \bm{\theta}_{\mathrm{model}}).
+  }
+\end{equation}
+The transition includes floating-base and articulated rigid-body dynamics,
+position-PD actuation, force saturation, ground contact, and physical
+EE--box contact. The rollout model disables only physical contact between the
+arm subtree and the torso collision geometry; their clearance is instead
+handled by the analytic soft cost and hard rejection described later. Arm
+contact with the box and ground remains enabled.
+
+The configured integration interval and horizon are
+\begin{equation}
+  \Delta t=0.01\,\mathrm{s},\qquad H=40,\qquad
+  T_H=H\Delta t=0.4\,\mathrm{s}.
+\end{equation}
+The rollouts use a pyramidal friction cone and the enabled contact override
+\begin{equation}
+  \code{o\_solref}=[0.02,1.0].
+\end{equation}
+The simulator copies the rollout model's cone, override flag,
+\code{o\_solref}, \code{o\_solimp}, friction override, and margin so that
+predicted and executed contact options match.
+
+\subsection{Implicit Contact Scheduling}
+
+No contact force appears in $\bm{u}$, and there is no prescribed stance,
+swing, or EE--box contact mode in the dynamic optimization. Leg contact is
+determined by the height-conditioned gait prior together with MuJoCo
+collision. Box pushing emerges from physical arm--box contact when sampled
+joint-position commands bring the EE into the box.
+
+The Boolean \code{contact\_engaged} flag does not measure a MuJoCo contact
+force. It switches when the measured EE position is sufficiently close to a
+geometric pre-contact target. It changes the reference used by IK and the
+cost, but physical contact is still resolved exclusively by MuJoCo.
+
+%=============================================================================
+\section{Finite-Horizon Stochastic Optimal Control Problem}
+%=============================================================================
+
+For a fixed reference supplied by the task logic and CEM planner, the intended
+MPPI problem can be written as
+\begin{equation}
+\boxed{
+\begin{aligned}
+\min_{\bm{U}}\quad
+  &J(\bm{U};\bm{x}_0)
+   =\sum_{k=0}^{H-1}\ell_k(\bm{x}_{k+1},\bm{u}_k)
+    +\Phi_{\mathrm{EE}}(\bm{x}_H),\\
+\mathrm{s.t.}\quad
+  &\bm{x}_{k+1}=F_{\mathrm{MJ}}(\bm{x}_k,\bm{u}_k),\\
+  &\bm{u}_{\min}\leq\bm{u}_k\leq\bm{u}_{\max},\\
+  &d_{k,s}\geq d_{\mathrm{hard}},\qquad s=1,2,3,\\
+  &\bm{x}_0=\hat{\bm{x}}(t),
+\end{aligned}}
+\label{eq:finite_ocp}
+\end{equation}
+where $\bm{U}=[\bm{u}_0,\ldots,\bm{u}_{H-1}]$ and $d_{k,s}$ is the
+arm-capsule-to-torso clearance. The box goal is a soft objective, not a hard
+terminal constraint.
+
+The controller samples $N=30$ candidate sequences around a structured
+gait/IK prior. In parallel, the CEM planner periodically solves a separate
+static kinematic problem for the base reference. CEM does not propagate
+dynamics, score box motion over the MPPI horizon, or replace the MPPI
+optimization in Eq.~\eqref{eq:finite_ocp}.
+
+%=============================================================================
+\section{Push Geometry, Base-Pose Planning, and Task Progression}
+%=============================================================================
+
+\subsection{Box Goal and Push Direction}
+
+The single configured box-position target is
+\begin{equation}
+  \bm{p}_o^*=[3.0,2.0,0.19]^\top\;\mathrm{m}.
+\end{equation}
+For a predicted box position $\bm{p}_{o,k}$, the horizontal push direction is
+\begin{equation}
+  \bm{d}_k^{xy}
+  =
+  \frac{\bm{p}_o^{*,xy}-\bm{p}_{o,k}^{xy}}
+       {\norm{\bm{p}_o^{*,xy}-\bm{p}_{o,k}^{xy}}},
+  \qquad
+  \bm{d}_k=
+  \begin{bmatrix}\bm{d}_k^{xy}\\0\end{bmatrix}.
+\end{equation}
+When the horizontal distance is numerically zero, the most recent valid push
+direction is reused.
+
+\subsection{Moving Contact Target}
+
+Let $\bm{R}_{o,k}$ be the world-from-box rotation and
+$\bm{h}_o=[0.19,0.19,0.19]^\top\,\mathrm{m}$ the box half-size. The distance
+from the box center to its surface along $\bm{d}_k$ is
+\begin{equation}
+  \rho_k
+  =\min_{i:\,|(\bm{R}_{o,k}^\top\bm{d}_k)_i|>0}
+  \frac{h_{o,i}}{|(\bm{R}_{o,k}^\top\bm{d}_k)_i|}.
+\end{equation}
+The moving EE target lies on the face opposite the desired motion:
+\begin{equation}
+  \tilde{\bm{p}}_{e,k}^*
+  =\bm{p}_{o,k}-\rho_k\bm{d}_k+\delta\bm{d}_k,
+\end{equation}
+after which its vertical component is explicitly overwritten as
+\begin{equation}
+  p_{e,k}^{*,z}=p_{o,k}^{z}-0.05\,\mathrm{m}.
+\end{equation}
+The offset $\delta$ defines two reference modes:
+\begin{equation}
+  \delta=
+  \begin{cases}
+    -0.05\,\mathrm{m},&\text{before engagement},\\
+    +0.015\,\mathrm{m},&\text{after engagement}.
+  \end{cases}
+\end{equation}
+Thus the first target stays outside the rear face, whereas the second is a
+small virtual penetration into the face that encourages sustained physical
+contact. Every rollout recomputes this target from its own predicted box pose;
+the cost does not track only the currently observed target.
+
+Engagement occurs when the current EE is within $0.04\,\mathrm{m}$ of the
+pre-contact target. The switch is one-way until success and triggers a CEM
+refresh for the new penetration target.
+
+\subsection{Success Condition}
+
+Only horizontal box error determines task completion:
+\begin{equation}
+  \norm{\bm{p}_o^{xy}-\bm{p}_o^{*,xy}}
+  \leq0.20\,\mathrm{m}.
+\end{equation}
+The inequality must hold for 20 consecutive calls to \code{goal\_reached};
+the counter resets to zero whenever the box leaves the tolerance. On success,
+pending CEM work is invalidated, contact engagement is cleared, the
+\code{stance\_hold} gait is selected, and the controller holds the current
+base position.
+
+%=============================================================================
+\subsection{Kinematic CEM Base-Pose Planner}
+%=============================================================================
+
+\subsubsection{Decision Variable and Sampling}
+
+The asynchronous planner searches
+\begin{equation}
+  \bm{z}=
+  [\Delta x_b,\Delta y_b,z_b]^\top
+\end{equation}
+using a private MuJoCo model, private IK data, and a dedicated random
+generator. Its feasible search region is
+\begin{equation}
+  \norm{[\Delta x_b,\Delta y_b]^\top}\leq0.40\,\mathrm{m},
+  \qquad
+  0.35\leq z_b\leq0.543542\,\mathrm{m}.
+\end{equation}
+CEM draws 30 samples per iteration for three iterations, retains the best
+20\% as elites, and exponentially smooths the new distribution with factor
+$0.15$. The first iteration also includes deterministic seeds at three
+forward offsets and three height levels. A complete plan normally evaluates
+$30\times3=90$ kinematic candidates and launches no additional MPPI rollout.
+
+\subsubsection{CEM Objective}
+
+For a candidate base pose, position-only IK produces an arm posture and EE
+residual $r$. Define
+\begin{align}
+  \eta_r&=\frac{r}{0.03},&
+  v_r&=\max(\eta_r-1,0),\\
+  \eta_{xy}&=\frac{\norm{[\Delta x_b,\Delta y_b]^\top}}{0.40},&
+  \eta_h&=\frac{0.543542-z_b}{0.543542-0.35}.
+\end{align}
+Let $\ell_{\mathrm{clr}}$ denote the normalized arm--torso clearance deficit
+and $\ell_{\mathrm{lim}}$ the normalized arm joint-limit margin deficit. The
+implemented CEM score is
+\begin{equation}
+\begin{split}
+  J_{\mathrm{CEM}}={}&
+  \eta_r^2
+  +100v_r^2
+  +1000\,\mathbb{I}_{\mathrm{infeasible}}
+  +6\eta_{xy}^2
+  +3\eta_h^2\\
+  &+2\ell_{\mathrm{clr}}
+  +\ell_{\mathrm{lim}}
+  +10^6\mathbb{I}_{\mathrm{arm\ collision}}.
+\end{split}
+\end{equation}
+A CEM candidate is labeled feasible only when $r\leq0.03\,\mathrm{m}$ and
+the arm--torso hard-clearance test passes.
+
+Before a CEM pose is applied, the controller also checks planar base--box
+separation. Using support radii of the oriented box and torso along their
+center-to-center direction, it requires an additional $0.05\,\mathrm{m}$
+clearance. A collision-free pose may be used as a
+\code{fallback-intermediate} plan even if its IK residual exceeds the CEM
+reachability threshold; such a plan is flagged for later replanning.
+
+\subsubsection{Asynchronous Reference Management}
+
+CEM runs on one background worker while MPPI continues using the current
+reference. A completed result is discarded if the request ID is obsolete, if
+the contact target moved more than $0.10\,\mathrm{m}$, or if the box moved
+more than $0.10\,\mathrm{m}$ since submission. A refresh is requested when:
+\begin{itemize}
+  \item engagement changes the contact target,
+  \item the active target drifts by at least $0.08\,\mathrm{m}$, or
+  \item a fallback plan settles without becoming feasible.
+\end{itemize}
+Requests are separated by at least 10 controller steps, and fallback
+replanning is limited to eight attempts.
+
+The accepted base reference is approached with rate limits. Height changes at
+at most $0.10\,\mathrm{m/s}$. Horizontal speed is at most
+$1.0\,\mathrm{m/s}$ at standing height and decreases linearly to 40\% of that
+value at the minimum height. Position and height tolerances use hysteresis to
+avoid repeatedly switching between walking and settled modes.
+
+%=============================================================================
+\section{Nominal Whole-Body Trajectory}
+%=============================================================================
+
+\subsection{Height-Conditioned Leg Gait}
+
+The default and tracking gait is \code{stance\_hold}; \code{walk\_fast} is
+selected while planar base motion is required. Each gait has phase-compatible
+references at base heights
+\begin{equation}
+  z_b\in\{0.35,\;0.45,\;0.543542\}\;\mathrm{m}.
+\end{equation}
+The scheduler linearly interpolates joint positions and velocities between
+the two surrounding height levels. When the commanded height changes, the
+joint-velocity reference also includes the morphing derivative induced by
+$\dot z_b$. Gait switches preserve the previous phase instead of restarting
+the gait.
+
+\subsection{Arm IK Reference}
+
+At every controller update, the active moving contact target is converted to
+a four-joint arm reference with position-only damped least-squares IK:
+\begin{align}
+  \bm{e}^{(r)}
+  &=\bm{p}_e^*-\bm{p}_e(\bm{q}_a^{(r)}),\\
+  \Delta\bm{q}_a^{(r)}
+  &=\bm{J}_a^\top
+    \left(\bm{J}_a\bm{J}_a^\top+\lambda_{\mathrm{IK}}^2\bm{I}\right)^{-1}
+    \bm{e}^{(r)},\\
+  \bm{q}_a^{(r+1)}
+  &=\clip\left(
+    \bm{q}_a^{(r)}+\alpha_{\mathrm{IK}}\Delta\bm{q}_a^{(r)}
+    \right).
+\end{align}
+The MPPI-side update uses damping $0.05$, step size $0.7$, and at most five
+iterations. The new solution is filtered with smoothing factor $0.3$ and a
+per-update joint-change limit of $0.04\,\mathrm{rad}$. The CEM reachability
+test uses the same IK structure but allows 40 iterations.
+
+\subsection{Whole-Body Prior and Residual Warm Start}
+
+The horizon reference is
+\begin{equation}
+  \bm{r}_{j,k}=
+  \begin{bmatrix}
+    \bm{q}^{g}_{\ell,k}\\
+    \bm{q}^{\mathrm{IK}}_a\\
+    \dot{\bm{q}}^{g}_{\ell,k}\\
+    \bm{0}_4
+  \end{bmatrix}
+  \in\R^{32}.
+\end{equation}
+Its position component plus a warm-started correction defines the nominal
+action:
+\begin{equation}
+  \bar{\bm{u}}_k=
+  \begin{bmatrix}
+    \bm{q}^{g}_{\ell,k}\\
+    \bm{q}^{\mathrm{IK}}_a
+  \end{bmatrix}
+  +\Delta\bm{u}^{\mathrm{warm}}_k.
+\end{equation}
+After optimization, the selected correction relative to the gait/IK nominal
+is shifted by one step, and the new tail correction is set to zero. For the
+first 50 controller updates, the gait/IK reference is blended from the
+standing initialization.
+
+%=============================================================================
+\section{Sampling and MPPI Update}
+%=============================================================================
+
+\subsection{Cubic Noise Sampling}
+
+Gaussian perturbations are drawn at four temporal knots and only the
+perturbation is interpolated with a cubic spline:
+\begin{align}
+  \bm{\epsilon}_{n,j}
+  &\sim\mathcal{N}(\bm{0},\diag(\bm{\sigma}^2)),\\
+  \tilde{\bm{\epsilon}}_{n,0:H-1}
+  &=\operatorname{CubicSpline}(\bm{\epsilon}_{n,1:4}),\\
+  \bm{u}_{n,k}
+  &=\clip\left(
+    \bar{\bm{u}}_k+\tilde{\bm{\epsilon}}_{n,k},
+    \bm{u}_{\min},\bm{u}_{\max}
+  \right).
+\end{align}
+The base standard deviations are $0.03$ for each hip, $0.10$ for each thigh
+and calf, and $0.06\,\mathrm{rad}$ for each arm joint. The
+\code{stance\_hold} gait multiplies these values by $0.6$; \code{walk\_fast}
+uses scale $1.0$. Candidate zero is replaced with the clipped noise-free
+nominal trajectory.
+
+\subsection{Cost Normalization and Weights}
+
+Let $\mathcal{V}$ be the candidates that pass the hard arm--torso test and
+have finite total cost. For $n\in\mathcal{V}$,
+\begin{align}
+  S_{\min}&=\min_{n\in\mathcal{V}}S_n,\\
+  \Delta S&=\max_{n\in\mathcal{V}}S_n-S_{\min},\\
+  w_n&=
+  \begin{cases}
+    \exp\!\left[
+      -\dfrac{1}{\lambda_{\mathrm{MPPI}}}
+       \dfrac{S_n-S_{\min}}{\Delta S}
+    \right],
+    &\Delta S>10^{-12},\\
+    1,&\Delta S\leq10^{-12},
+  \end{cases}
+\end{align}
+and $w_n=0$ for invalid candidates. The configured temperature is
+$\lambda_{\mathrm{MPPI}}=0.1$. The updated sequence is the weighted average
+of the absolute candidate actions:
+\begin{equation}
+  \boxed{
+  \bm{u}^{+}_k=
+  \clip\left(
+    \frac{\sum_{n=1}^{N}w_n\bm{u}_{n,k}}
+         {\sum_{n=1}^{N}w_n+10^{-10}},
+    \bm{u}_{\min},\bm{u}_{\max}
+  \right).
+  }
+\end{equation}
+If every candidate is invalid, the last accepted safe trajectory is shifted
+and its final action is repeated. Only $\bm{u}^{+}_0$ is executed.
+
+%=============================================================================
+\section{Cost Function}
+%=============================================================================
+
+\subsection{Robot State and Virtual PD Effort}
+
+The robot reference is assembled from the ramped base pose and velocity
+commands, the height-conditioned leg gait, and the arm IK reference. Before
+cost evaluation, the actual world-frame base linear velocity is transformed
+to the base-local frame.
+
+Let $\bm{e}_{r,k}$ be the robot-state error after replacing the raw quaternion
+difference with base roll and pitch errors and zeroing the remaining two
+quaternion slots. The robot and virtual-effort cost is
+\begin{align}
+  \tilde{\bm{\tau}}_k
+  &=\bm{K}_p(\bm{u}_k-\bm{q}_{j,k})
+    -\bm{K}_d\dot{\bm{q}}_{j,k},\\
+  \ell_{r,k}
+  &=\bm{e}_{r,k}^{\top}\bm{Q}_r\bm{e}_{r,k}
+    +\tilde{\bm{\tau}}_k^\top\bm{R}\tilde{\bm{\tau}}_k.
+\end{align}
+The nonzero diagonal weights are:
+\begin{itemize}
+  \item base $x/y/z$: $3000$, $3000$, and $1500$,
+  \item base roll/pitch: $5000$ and $3000$,
+  \item all 16 joint positions: $500$ each,
+  \item base-local linear velocity $x/y$: $20$ each,
+  \item base linear $z$ and all three angular velocities: $0.1$ each,
+  \item virtual PD effort: $\bm{R}=10^{-3}\bm{I}_{16}$.
+\end{itemize}
+Yaw and all joint-velocity tracking weights are zero. The virtual effort does
+not include MuJoCo actuator-force saturation and therefore need not equal the
+force actually applied in the rollout.
+
+\subsection{Box Position and Tilt}
+
+The box position cost retains the weighted L1 form used by the push-box
+controller:
+\begin{equation}
+  \boxed{
+  \ell_{o,k}
+  =1000|p_{o,k}^x-p_o^{*,x}|
+   +1500|p_{o,k}^y-p_o^{*,y}|.
+  }
+\end{equation}
+The configured vertical box-position weight is zero, and box linear and
+angular velocities are not directly penalized.
+
+Let $\bm{R}_{o,k}$ be the box rotation. Its yaw-invariant tilt angle is
+\begin{equation}
+  \theta_{o,k}=\arccos\!\left(
+  \clip([\bm{R}_{o,k}]_{33},-1,1)\right).
+\end{equation}
+The orientation cost is
+\begin{equation}
+  \ell_{\mathrm{tilt},k}
+  =10^4\theta_{o,k}^2
+   +10^5\mathbb{I}\{\theta_{o,k}>0.35\}.
+\end{equation}
+The second term is a large soft discontinuous penalty; it does not mark a
+rollout invalid.
+
+\subsection{Moving EE Contact Cost}
+
+For the rollout-dependent target derived in Section 5,
+\begin{equation}
+  \ell_{p,k}
+  =7000\sqnorm{\bm{p}_{e,k}-\bm{p}_{e,k}^*}.
+\end{equation}
+The implementation also supports the sign-invariant quaternion error
+\begin{equation}
+  e_{R,k}
+  =2\arccos\left(
+  \clip(|\bm{q}_{e,k}^\top\bm{q}_e^*|,-1,1)\right),
+  \qquad
+  \ell_{R,k}=w_R e_{R,k}^2,
+\end{equation}
+but the push-box configuration sets $w_R=0$. EE orientation tracking is
+therefore disabled.
+
+The final EE term receives an additional multiplier of 10:
+\begin{equation}
+  \Phi_{\mathrm{EE}}(\bm{x}_H)
+  =10(\ell_{p,H-1}+\ell_{R,H-1}).
+\end{equation}
+Because the same error is already present in the last stage, its total final
+coefficient is 11. There is no analogous terminal multiplier on the box
+position or tilt cost.
+
+\subsection{Arm--Torso Clearance}
+
+Four frames---shoulder, elbow, wrist, and EE---form three arm capsules with
+radii
+\begin{equation}
+  [0.030,0.030,0.0375]\;\mathrm{m}.
+\end{equation}
+The torso is the oriented box associated with \code{base\_collision}, with
+half-size $[0.25,0.14,0.075]\,\mathrm{m}$. The proximal $0.07\,\mathrm{m}$ of
+the first capsule is excluded near the structural shoulder mount.
+
+For signed capsule clearances $d_{k,s}$, the soft cost is
+\begin{equation}
+  \boxed{
+  \ell_{c,k}
+  =10^4\sum_{s=1}^{3}
+  [\max(0.005-d_{k,s},0)]^2.
+  }
+\end{equation}
+A complete rollout is valid only if
+\begin{equation}
+  d_{k,s}\geq0
+  \qquad\text{for every }k\text{ and }s.
+\end{equation}
+Thus capsule penetration is rejected, while a tangent configuration is
+allowed. The shared collision helper first uses uniformly sampled centerline
+points to bound clearance and invokes the exact segment-to-box distance only
+when needed for hard-validity classification.
+
+\subsection{Total Stage and Rollout Cost}
+
+The complete stage cost is
+\begin{equation}
+  \ell_k
+  =\ell_{r,k}+\ell_{o,k}+\ell_{\mathrm{tilt},k}
+   +\ell_{p,k}+\ell_{R,k}+\ell_{c,k}.
+\end{equation}
+Candidate $n$ has total cost
+\begin{equation}
+  \boxed{
+  S_n
+  =\sum_{k=0}^{H-1}\ell_k^{(n)}
+   +10\left(
+     \ell_{p,H-1}^{(n)}+\ell_{R,H-1}^{(n)}
+   \right).
+  }
+\end{equation}
+Only arm--torso hard clearance and non-finite cost affect the validity mask;
+large box tilt remains part of $S_n$ rather than causing hard rejection.
+
+%=============================================================================
+\section{Complete Receding-Horizon Algorithm}
+%=============================================================================
+
+\begin{algorithm}[ht]
+\caption{\code{push\_box} CEM-guided whole-body MPPI update}
+\label{alg:push_box_mppi}
+\begin{algorithmic}[1]
+  \REQUIRE Observation $\hat{\bm{x}}$, active base plan, previous safe MPPI plan
+  \STATE Split $\hat{\bm{x}}$ into robot and box states.
+  \STATE Compute the box-to-goal direction and moving EE contact target.
+  \STATE Engage the penetration target if the EE reaches the pre-contact target.
+  \STATE Apply a completed non-stale CEM plan, if available.
+  \STATE Submit a background CEM refresh when required and allowed by cooldown.
+  \STATE Ramp the base reference toward the accepted CEM pose.
+  \STATE Select \code{walk\_fast} during planar motion; otherwise select
+         \code{stance\_hold}.
+  \STATE Solve smoothed position IK for the current moving EE target.
+  \STATE Combine height-conditioned gait and arm IK with the shifted MPPI
+         correction.
+  \STATE Generate $N=30$ cubic-noise candidate sequences and preserve one
+         noise-free nominal candidate.
+  \STATE Roll out every candidate for $H=40$ MuJoCo steps with FK sensors.
+  \STATE Evaluate robot, box, EE-contact, tilt, and arm-clearance costs.
+  \STATE Set zero weight for every hard-collision or non-finite rollout.
+  \IF{at least one valid candidate exists}
+    \STATE Normalize valid costs and compute exponential weights.
+    \STATE Take the weighted mean of absolute candidate actions and save it as
+           the latest safe plan.
+  \ELSE
+    \STATE Shift and reuse the previous safe plan.
+  \ENDIF
+  \STATE Shift the gait/IK correction and advance gait phase.
+  \RETURN The first desired joint-position command $\bm{u}^{+}_0$
+\end{algorithmic}
+\end{algorithm}
+
+The standard \code{simulate\_mppi.py} configuration uses a $0.01\,\mathrm{s}$
+simulation step and a $100\,\mathrm{Hz}$ controller rate, so one MPPI update
+and one task-success check are requested per simulation step.
+
+%=============================================================================
+\section{Default Configuration Summary}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.40\textwidth}
+                >{\raggedright\arraybackslash}p{0.43\textwidth}}
+\toprule
+Parameter & Default value\\
+\midrule
+Robot / object & B2 with four-DoF Z1 / free $0.38\,\mathrm{m}$ box\\
+Full state / input dimension & $58$ / $16$\\
+Robot / box state dimension & $45$ / $13$\\
+Input interpretation & desired joint position\\
+Time step / horizon & $0.01\,\mathrm{s}$ / 40 steps ($0.4\,\mathrm{s}$)\\
+MPPI samples / workers & 30 / 5\\
+MPPI temperature & $0.1$\\
+Sampler & cubic perturbation, four knots\\
+Initial keyframe & \code{stand}\\
+Tracking / approach gait & \code{stance\_hold} / \code{walk\_fast}\\
+Height-conditioned levels & $0.35$, $0.45$, $0.543542\,\mathrm{m}$\\
+CEM variable & $[\Delta x_b,\Delta y_b,z_b]^\top$\\
+CEM samples / iterations / elite fraction & 30 / 3 / 0.20\\
+CEM maximum horizontal shift & $0.40\,\mathrm{m}$\\
+Box position target & $[3.0,2.0,0.19]^\top\,\mathrm{m}$\\
+Pre-contact gap / push penetration & $0.05/0.015\,\mathrm{m}$\\
+EE position/orientation weights & 7000 / 0\\
+EE terminal scale & 10\\
+Box $x/y/z$ L1 weights & 1000 / 1500 / 0\\
+Box tilt weight / threshold / violation penalty & $10^4$ / $0.35$ rad / $10^5$\\
+Collision safe/hard distances & $0.005/0.0\,\mathrm{m}$\\
+Collision soft weight & $10^4$\\
+Box success tolerance / hold & $0.20\,\mathrm{m}$ / 20 checks\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% The former Section 11, ``Comparison with OCS2 Legged MPC'', is intentionally
+% omitted for the push-box analysis. Preserve the later section numbers so the
+% omission is visible in the table of contents.
+\setcounter{section}{11}
+
+%=============================================================================
+\section{Implementation Caveats and Limitations}
+%=============================================================================
+
+\begin{enumerate}
+  \item \textbf{The update differs from canonical MPPI.}
+  Costs are normalized by the valid batch's min--max range, and absolute
+  candidate actions are averaged. There is no control-noise correction term.
+  Consequently, $\lambda=0.1$ controls selection pressure over normalized
+  relative cost rather than temperature in the original physical cost units.
+
+  \item \textbf{Engagement is geometric, not contact-sensor based.}
+  The target switches after an EE position-tolerance test. It does not verify
+  normal force, sustained contact, or whether the EE is on the intended face.
+
+  \item \textbf{The CEM planner is kinematic and local.}
+  It searches at most $0.40\,\mathrm{m}$ from the base pose at request time,
+  assumes an upright base, and does not predict balance, gait feasibility, box
+  motion, or dynamic contact. A fallback pose may intentionally remain outside
+  the configured IK residual threshold.
+
+  \item \textbf{The moving contact target is a point objective.}
+  EE orientation has zero weight. The point is placed at a fixed vertical
+  offset from the box center and does not optimize contact normal alignment,
+  friction cone margin, or wrench direction.
+
+  \item \textbf{Box tilt is not a hard constraint.}
+  Exceeding $0.35$ rad adds $10^5$ to the cost but does not invalidate the
+  rollout. Whether this is sufficient depends on the scale and spread of all
+  other accumulated costs.
+
+  \item \textbf{The collision model is incomplete.}
+  Hard rejection covers three arm capsules against one torso box. It does not
+  guarantee arm--leg, gripper--environment, box--base, or general
+  self-collision safety over MPPI rollouts. The separate CEM acceptance check
+  covers only the planned base footprint against the current box footprint.
+
+  \item \textbf{Analytic and physical collision models are intentionally
+  different.}
+  Arm--torso physical contact is disabled in the rollout model while the
+  analytic capsule constraint is active. Model mismatch in capsule radii,
+  torso geometry, or exclusions directly affects safety.
+
+  \item \textbf{Effort cost is not applied torque.}
+  The virtual PD effort omits actuator-force saturation. Large errors can
+  therefore make its numerical penalty differ from MuJoCo's applied force.
+
+  \item \textbf{Several quantities are soft-only.}
+  The box target, box uprightness, base tracking, IK reachability during MPPI,
+  and EE contact are objectives or references, not formal dynamic constraints.
+
+  \item \textbf{Real-time performance must be measured.}
+  Each update evaluates $30\times40$ contact-dynamics steps and rollout
+  sensors, while CEM occasionally evaluates 90 IK/collision candidates on a
+  background thread. Sustained $100\,\mathrm{Hz}$ operation depends on the
+  target CPU and thread contention.
+\end{enumerate}
+
+%=============================================================================
+\section{Recommended Validation}
+%=============================================================================
+
+Useful closed-loop measurements include:
+\begin{enumerate}
+  \item mean, 95th, and 99th percentile MPPI update time and the 10 ms
+        deadline-miss rate, with and without concurrent CEM,
+  \item CEM latency, IK residual, accepted/fallback/rejected plan counts, and
+        stale-plan discard count,
+  \item box $x/y$ error, path length, speed, yaw, tilt, and completion time,
+  \item EE-to-moving-target error, engagement time, and measured EE--box
+        contact force,
+  \item minimum arm--torso clearance, valid-rollout fraction, and all-invalid
+        MPPI fallback count,
+  \item base tracking error, roll/pitch, foot contacts, and slip,
+  \item gait/IK nominal, selected actions, warm-start correction, and actuator
+        saturation rate,
+  \item one-step error between predicted and executed robot and box states.
+\end{enumerate}
+
+Useful ablations include disabling the CEM base planner, removing the
+penetration switch, replacing the geometric engagement test with contact
+feedback, removing the tilt violation penalty, disabling terminal EE
+emphasis, and comparing \code{stance\_hold} noise scale $0.6$ against $1.0$.
+
+%=============================================================================
+\section{Pipeline Summary}
+%=============================================================================
+
+\begin{equation*}
+\boxed{
+\begin{array}{c}
+\text{Current robot--box state }\hat{\bm{x}}_t\\
+\downarrow\\
+\text{Box-to-goal direction + moving rear-face EE target}\\
+\downarrow\\
+\text{Asynchronous kinematic CEM base-pose reference}\\
+\downarrow\\
+\text{Rate-limited base command + height-conditioned gait + arm IK}\\
+\downarrow\\
+\text{Whole-body nominal action + shifted MPPI correction}\\
+\downarrow\\
+\text{Cubic Gaussian sampling }(30\times40\times16)\\
+\downarrow\\
+\text{Parallel MuJoCo robot--box rollouts + FK sensors}\\
+\downarrow\\
+\text{Robot/effort + box/tilt + EE/contact + clearance cost}\\
+\downarrow\\
+\text{Hard arm--torso rejection + exponential weighting}\\
+\downarrow\\
+\text{Execute the first desired joint-position action}
+\end{array}}
+\end{equation*}
+
+The defining design choice is the separation between a low-dimensional
+kinematic CEM reference planner and a full-dynamics MPPI controller. CEM moves
+the base reference toward a posture from which the evolving contact point is
+reachable; MPPI then searches whole-body desired joint-position trajectories
+whose MuJoCo rollouts actually stabilize the robot and move the free box.
+
+\end{document}
