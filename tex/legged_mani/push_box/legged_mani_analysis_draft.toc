@@ -20,16 +20,19 @@
 \contentsline {subsection}{\numberline {6.2}Arm IK Reference}{7}{subsection.6.2}%
 \contentsline {subsection}{\numberline {6.3}Whole-Body Prior and Residual Warm Start}{8}{subsection.6.3}%
 \contentsline {section}{\numberline {7}Sampling and MPPI Update}{8}{section.7}%
-\contentsline {subsection}{\numberline {7.1}Cubic Noise Sampling}{8}{subsection.7.1}%
-\contentsline {subsection}{\numberline {7.2}Cost Normalization and Weights}{8}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.1}Rollout Sampling Modes}{8}{subsection.7.1}%
+\contentsline {paragraph}{\texttt {original}.}{8}{section*.2}%
+\contentsline {paragraph}{\texttt {original\_spline}.}{8}{section*.3}%
+\contentsline {paragraph}{\texttt {safe\_spline}.}{9}{section*.4}%
+\contentsline {subsection}{\numberline {7.2}Cost Normalization and Weights}{9}{subsection.7.2}%
 \contentsline {section}{\numberline {8}Cost Function}{9}{section.8}%
 \contentsline {subsection}{\numberline {8.1}Robot State and Virtual PD Effort}{9}{subsection.8.1}%
-\contentsline {subsection}{\numberline {8.2}Box Position and Tilt}{9}{subsection.8.2}%
-\contentsline {subsection}{\numberline {8.3}Moving EE Contact Cost}{9}{subsection.8.3}%
-\contentsline {subsection}{\numberline {8.4}Arm--Torso Clearance}{10}{subsection.8.4}%
-\contentsline {subsection}{\numberline {8.5}Total Stage and Rollout Cost}{10}{subsection.8.5}%
-\contentsline {section}{\numberline {9}Complete Receding-Horizon Algorithm}{10}{section.9}%
-\contentsline {section}{\numberline {10}Default Configuration Summary}{12}{section.10}%
-\contentsline {section}{\numberline {12}Implementation Caveats and Limitations}{12}{section.12}%
-\contentsline {section}{\numberline {13}Recommended Validation}{13}{section.13}%
-\contentsline {section}{\numberline {14}Pipeline Summary}{14}{section.14}%
+\contentsline {subsection}{\numberline {8.2}Box Position and Tilt}{10}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Moving EE Contact Cost}{10}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}Arm--Torso Clearance}{11}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}Total Stage and Rollout Cost}{11}{subsection.8.5}%
+\contentsline {section}{\numberline {9}Complete Receding-Horizon Algorithm}{11}{section.9}%
+\contentsline {section}{\numberline {10}Default Configuration Summary}{13}{section.10}%
+\contentsline {section}{\numberline {12}Implementation Caveats and Limitations}{13}{section.12}%
+\contentsline {section}{\numberline {13}Recommended Validation}{14}{section.13}%
+\contentsline {section}{\numberline {14}Pipeline Summary}{15}{section.14}%

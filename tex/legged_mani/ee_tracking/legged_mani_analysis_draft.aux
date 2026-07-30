@@ -32,24 +32,27 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Arm IK Reference}{6}{subsection.5.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Whole-Body Joint Reference and Residual Warm Start}{6}{subsection.5.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {6}Sampling and MPPI Update}{7}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Cubic Noise Sampling}{7}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Cost Normalization and Weights}{7}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Cost Function}{7}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}State Reference}{7}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Body and Joint State Cost}{8}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Virtual PD Effort Cost}{8}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}End-Effector Pose Cost}{8}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Arm--Torso Collision Model}{9}{subsection.7.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.5.1}Geometry}{9}{subsubsection.7.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.5.2}Soft Cost and Hard Rejection}{9}{subsubsection.7.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}Total Stage and Rollout Cost}{9}{subsection.7.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}End-Effector Waypoints and Task Progression}{9}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {9}Complete Receding-Horizon Algorithm}{10}{section.9}\protected@file@percent }
-\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces \texttt  {legged\_mani} locomani MPPI update}}{10}{algorithm.1}\protected@file@percent }
-\newlabel{alg:locomani_mppi}{{1}{10}{Complete Receding-Horizon Algorithm}{algorithm.1}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {10}Default Configuration Summary}{11}{section.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {11}Comparison with OCS2 Legged MPC}{11}{section.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {12}Implementation Caveats and Limitations}{11}{section.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {13}Recommended Validation}{12}{section.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {14}Pipeline Summary}{13}{section.14}\protected@file@percent }
-\gdef \@abspage@last{13}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Rollout Sampling Modes}{7}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {original}.}{7}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {original\_spline}.}{7}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{\texttt  {safe\_spline}.}{7}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Cost Normalization and Weights}{8}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Cost Function}{8}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}State Reference}{8}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Body and Joint State Cost}{9}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Virtual PD Effort Cost}{9}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}End-Effector Pose Cost}{9}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Arm--Torso Collision Model}{10}{subsection.7.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.5.1}Geometry}{10}{subsubsection.7.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.5.2}Soft Cost and Hard Rejection}{10}{subsubsection.7.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}Total Stage and Rollout Cost}{10}{subsection.7.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}End-Effector Waypoints and Task Progression}{10}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Complete Receding-Horizon Algorithm}{11}{section.9}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces \texttt  {legged\_mani} locomani MPPI update}}{11}{algorithm.1}\protected@file@percent }
+\newlabel{alg:locomani_mppi}{{1}{11}{Complete Receding-Horizon Algorithm}{algorithm.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {10}Default Configuration Summary}{12}{section.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {11}Comparison with OCS2 Legged MPC}{12}{section.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Implementation Caveats and Limitations}{12}{section.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {13}Recommended Validation}{13}{section.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {14}Pipeline Summary}{14}{section.14}\protected@file@percent }
+\gdef \@abspage@last{14}

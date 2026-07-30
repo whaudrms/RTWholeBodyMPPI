@@ -32,7 +32,7 @@ TASKS = {
         "default_orientation": DEFAULT_ORIENTATION,
         "cmd_vel": [[0.0, 0.0], 
                     [0.2, 0.0], 
-                    [0.0, 0.0]],
+                    [0.2,0.0]],
         "goal_thresh": [0.2, 
                         0.2, 
                         0.2],

@@ -356,27 +356,120 @@ the gait/IK reference.
 \section{Sampling and MPPI Update}
 %=============================================================================
 
-\subsection{Cubic Noise Sampling}
+\subsection{Rollout Sampling Modes}
 
-The default sampler draws Gaussian perturbations at $K=4$ temporal knots and
-interpolates only the perturbation with a cubic spline:
-\begin{align}
+The current controller exposes three main rollout modes:
+\code{original}, \code{original\_spline}, and \code{safe\_spline}. Both the
+controller constructor and \code{simulate\_mppi.py} select
+\code{original\_spline} by default. All three modes use $K=4$ horizon-aligned
+knots
+\begin{equation}
+  \mathcal{K}=\{\kappa_j\}_{j=0}^{K-1},
+  \qquad
+  \kappa_j=
+  \operatorname{round}\left(\frac{j(H-1)}{K-1}\right),
+\end{equation}
+For $H=40$, this gives $\mathcal{K}=\{0,13,26,39\}$. The implementation
+requires the rounded indices to be unique. Let
+$\mathcal{S}_{\mathcal{K}}[\cdot]_k$ denote cubic-spline reconstruction at
+horizon index $k$ from values defined at these knots. Each sample draws
+\begin{equation}
   \bm{\epsilon}_{n,j}
-  &\sim\mathcal{N}(\bm{0},\diag(\bm{\sigma}^2)),
-  &&j=1,\ldots,K,\\
-  \tilde{\bm{\epsilon}}_{n,0:H-1}
-  &=\operatorname{CubicSpline}
-  (\bm{\epsilon}_{n,1:K}),\\
-  \bm{u}_{n,k}
-  &=\clip\left(
-    \bar{\bm{u}}_k+\tilde{\bm{\epsilon}}_{n,k},
+  \sim\mathcal{N}(\bm{0},\diag(\bm{\sigma}^2)),
+  \qquad j=0,\ldots,K-1.
+\end{equation}
+
+For the gait-aware modes, define the full-rate gait/IK nominal
+$\bm{g}_k$, the shifted MPPI correction $\bm{c}_k$, and the clipped absolute
+warm start
+\begin{equation}
+  \bm{a}_k
+  =\clip(\bm{g}_k+\bm{c}_k,\bm{u}_{\min},\bm{u}_{\max}).
+\end{equation}
+The three sampling rules are as follows.
+
+\paragraph{\code{original}.}
+This mode disables the explicit gait/IK nominal
+(\code{nominal\_from\_gait}$=$\code{False}) and maps internally to
+\path{sample_type=cubic_original}. Here $\bm{a}_k$ denotes the
+previous optimized absolute action sequence after receding-horizon shifting.
+The knot actions are perturbed and the complete absolute action is
+reconstructed:
+\begin{equation}
+  \boxed{
+  \bm{u}_{n,k}^{\mathrm{original}}
+  =\clip\left(
+    \mathcal{S}_{\mathcal{K}}
+    [\bm{a}_{\kappa_j}+\bm{\epsilon}_{n,j}]_k,
     \bm{u}_{\min},\bm{u}_{\max}
   \right).
-\end{align}
-The locomani noise standard deviations are $0.03$ for each hip, $0.1$ for
-each thigh and calf, and $0.06\,\mathrm{rad}$ for each arm joint. Candidate
-zero is overwritten with the noise-free nominal, ensuring that every batch
-contains at least one unperturbed baseline trajectory.
+  }
+\end{equation}
+After the MPPI update, the selected absolute sequence is shifted and its last
+action is repeated at the new horizon tail.
+
+\paragraph{\code{original\_spline}.}
+This is the default mode and maps internally to
+\path{sample_type=cubic_gait_absolute}. It enables the gait/IK nominal and
+forms $\bm{a}_k$ from the full gait/IK/residual warm start, but then splines
+that complete absolute trajectory:
+\begin{equation}
+  \boxed{
+  \bm{u}_{n,k}^{\mathrm{original\_spline}}
+  =\clip\left(
+    \mathcal{S}_{\mathcal{K}}
+    [\bm{a}_{\kappa_j}+\bm{\epsilon}_{n,j}]_k,
+    \bm{u}_{\min},\bm{u}_{\max}
+  \right).
+  }
+\end{equation}
+Consequently, both the gait/IK component and the warm-started correction are
+reconstructed from only four knots. Short full-rate gait features between
+knots can therefore be smoothed.
+
+\paragraph{\code{safe\_spline}.}
+This mode maps internally to \path{sample_type=cubic_gait_residual}. It
+preserves the complete full-rate gait/IK nominal and applies the cubic spline
+only to the correction plus exploration noise:
+\begin{equation}
+  \boxed{
+  \bm{u}_{n,k}^{\mathrm{safe\_spline}}
+  =\clip\left(
+    \bm{g}_k+
+    \mathcal{S}_{\mathcal{K}}
+    [\bm{c}_{\kappa_j}+\bm{\epsilon}_{n,j}]_k,
+    \bm{u}_{\min},\bm{u}_{\max}
+  \right).
+  }
+\end{equation}
+It is therefore the only one of the three modes that preserves the nominal
+gait/IK samples at every horizon step before final action clipping.
+
+Candidate zero is overwritten with a mode-consistent noise-free baseline:
+\begin{center}
+\begin{tabular}{p{0.22\textwidth}p{0.62\textwidth}}
+\toprule
+Mode & Candidate-zero baseline\\
+\midrule
+\code{original}
+& $\bm{u}_{0,k}=\clip(\bm{a}_k)$, the full shifted absolute warm start\\
+\code{original\_spline}
+& $\bm{u}_{0,k}=\clip(
+   \mathcal{S}_{\mathcal{K}}[\bm{a}_{\kappa_j}]_k)$\\
+\code{safe\_spline}
+& $\bm{u}_{0,k}=\clip(
+   \bm{g}_k+\mathcal{S}_{\mathcal{K}}[\bm{c}_{\kappa_j}]_k)$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Thus every batch contains a zero-noise reference appropriate to the selected
+sampling family. In \code{original\_spline} and \code{safe\_spline}, the
+selected correction relative to $\bm{g}_k$ is shifted after optimization and
+the new tail correction is set to zero.
+
+The exploration standard deviations are $0.03$ for each hip, $0.10$ for each
+thigh and calf, and $0.06\,\mathrm{rad}$ for each arm joint. The default
+\code{in\_place} gait applies noise scale $1.0$.
 
 \subsection{Cost Normalization and Weights}
 
@@ -630,11 +723,13 @@ simulator calls \code{next\_goal()} after a successful goal check.
 \begin{algorithmic}[1]
   \REQUIRE Current observation $\hat{\bm{x}}$, gait phase, previous safe plan
   \STATE Update arm IK for the active EE waypoint.
-  \STATE Combine the leg gait and arm IK to refresh nominal plan
-         $\bar{\bm{U}}$.
-  \STATE Sample Gaussian noise at four knots and apply cubic interpolation to
-         generate $N=30$ candidate action sequences.
-  \STATE Replace candidate zero with the noise-free nominal sequence.
+  \STATE For gait-aware modes, combine the leg gait, arm IK, and shifted
+         correction to refresh the warm start.
+  \STATE Generate $N=30$ candidates using the selected
+         \code{original}, \code{original\_spline}, or
+         \code{safe\_spline} rule.
+  \STATE Replace candidate zero with the corresponding mode-consistent
+         noise-free baseline.
   \STATE Roll out all candidates for $H=40$ steps in MuJoCo.
   \STATE Evaluate state, effort, EE, and collision costs $S_n$.
   \STATE Assign zero weight to candidates that violate hard clearance.
@@ -646,7 +741,8 @@ simulator calls \code{next\_goal()} after a successful goal check.
   \ELSE
     \STATE Shift and reuse the previous safe plan as $\bm{U}^{+}$.
   \ENDIF
-  \STATE Shift the optimized gait/IK residual and advance the gait phase.
+  \STATE Shift either the absolute plan (\code{original}) or the optimized
+         gait/IK correction (gait-aware modes), and advance gait phase.
   \RETURN First desired joint-position command $\bm{u}^{+}_0$
 \end{algorithmic}
 \end{algorithm}
@@ -671,7 +767,7 @@ Input interpretation & desired joint position\\
 Time step / horizon & $0.01\,\mathrm{s}$ / 40 steps ($0.4\,\mathrm{s}$)\\
 Samples / workers & 30 / 5\\
 Temperature & $0.1$\\
-Sampler & cubic perturbation, four knots\\
+Rollout mode / knots & \code{original\_spline} (default) / four\\
 Initial keyframe & \code{stand}\\
 Default gait & \code{in\_place}, 100 samples per cycle\\
 Rollout contact & pyramidal cone, \code{o\_solref}$=[0.02,1.0]$\\
@@ -785,7 +881,7 @@ EE multiplier, and removal of gait-residual warm starting.
 \downarrow\\
 \text{Whole-body nominal action + warm-started residual}\\
 \downarrow\\
-\text{Cubic Gaussian sampling }(30\times40\times16)\\
+\text{Mode-selected cubic-spline sampling }(30\times40\times16)\\
 \downarrow\\
 \text{Parallel MuJoCo rollout + EE/FK sensors}\\
 \downarrow\\

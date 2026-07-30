@@ -1,4 +1,4 @@
-PWD /home/tony/leg_mppi_ws/RTWholeBodyMPPI/tex/legged_mani
+PWD /home/tony/leg_mppi_ws/RTWholeBodyMPPI/tex/legged_mani/ee_tracking
 INPUT /etc/texmf/web2c/texmf.cnf
 INPUT /usr/share/texmf/web2c/texmf.cnf
 INPUT /usr/share/texlive/texmf-dist/web2c/texmf.cnf
@@ -685,6 +685,7 @@ INPUT legged_mani_analysis_draft.aux
 INPUT ./legged_mani_analysis_draft.out
 INPUT ./legged_mani_analysis_draft.out
 INPUT /home/tony/.texlive2021/texmf-var/fonts/pk/ljfour/jknappen/ec/ecrm0900.600pk
+INPUT /home/tony/.texlive2021/texmf-var/fonts/pk/ljfour/jknappen/ec/ecrm0800.600pk
 INPUT /home/tony/.texlive2021/texmf-var/fonts/pk/ljfour/jknappen/ec/ecbx1200.600pk
 INPUT /home/tony/.texlive2021/texmf-var/fonts/pk/ljfour/jknappen/ec/tcrm1095.600pk
 INPUT /home/tony/.texlive2021/texmf-var/fonts/pk/ljfour/jknappen/ec/ectt1095.600pk
