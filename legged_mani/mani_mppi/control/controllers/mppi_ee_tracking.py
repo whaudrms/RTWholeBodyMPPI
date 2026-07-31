@@ -321,12 +321,6 @@ class MPPI(WholeBodyArmMPPI):
             capsule_clearance, capsule_valid = self._arm_torso_clearance(
                 flat_states, arm_positions
             )
-            clearance_deficit = np.maximum(
-                self.collision_safe_distance - capsule_clearance, 0.0
-            )
-            collision_cost = self.collision_soft_weight * np.sum(
-                clearance_deficit * clearance_deficit, axis=1
-            )
             clearance_rollouts = capsule_clearance.reshape(
                 num_samples, horizon, 3
             )
@@ -341,7 +335,6 @@ class MPPI(WholeBodyArmMPPI):
                 axis=(1, 2),
             )
         else:
-            collision_cost = np.zeros(len(flat_states), dtype=float)
             self.collision_min_clearance = np.full(num_samples, np.inf)
             self.collision_valid_rollouts = np.ones(num_samples, dtype=bool)
             self.collision_exact_evaluations = 0
@@ -360,7 +353,7 @@ class MPPI(WholeBodyArmMPPI):
             flat_states[:, 3:7], flat_states[:, 23:26]
         )
         costs = self.quadruped_cost_np(flat_states, flat_actions, x_ref)
-        costs += ee_position_cost + ee_orientation_cost + collision_cost
+        costs += ee_position_cost + ee_orientation_cost
         costs = costs.reshape(num_samples, horizon)
 
         # Increase the importance of the final EE pose.

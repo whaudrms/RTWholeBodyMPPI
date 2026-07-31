@@ -65,10 +65,8 @@ cem_reachability_weight: 100.0
 cem_residual_weight: 1.0
 cem_xy_weight: 6.0
 cem_height_weight: 3.0
-cem_clearance_weight: 2.0
 cem_joint_limit_weight: 1.0
 cem_joint_limit_margin: 0.10
-cem_collision_penalty: 1000000.0
 
 # Arm IK parameters used to generate the nominal arm-joint reference.
 arm_ik_damping: 0.05
@@ -78,8 +76,7 @@ arm_ik_tolerance: 0.0001
 arm_ik_smoothing: 0.3
 arm_ik_max_step: 0.04
 
-# Initialize the nominal control at the actual B2-Z1 stand keyframe.  This keeps
-# the first MPPI rollout consistent with the simulator state.
+# Initial joint angle
 sampling_init:
   - 0.0
   - 0.7
@@ -99,7 +96,7 @@ sampling_init:
   - 0.0
 
 # ============================
-# Model Parameters for Contact Dynamics
+# Contact Dynamics
 # ============================
 o_solref:
   - 0.02           # Time constant for contact model (stiffness control).
@@ -217,27 +214,20 @@ R_diag:
 
 
 # ============================
-# Collision Cost Parameters
+# Arm-to-torso Hard Collision Constraint
 # ============================
-# Arm-to-torso collision model. Four FK points define three capsule
 collision_enabled: true
 collision_body_geom: "base_collision"
-# The controller owns a separate MjModel. Disable its expensive physical
-# arm/base contacts; the analytic soft cost and hard rejection below replace
-# them. Contacts with the floor and external objects remain enabled.
 disable_arm_torso_rollout_contact: true
 rollout_arm_root_body: "link00"
 collision_capsule_radii: [0.030, 0.030, 0.0375]
-collision_shoulder_exclusion: 0.07
-collision_safe_distance: 0.005
-collision_hard_distance: 0.0
-collision_soft_weight: 10000.0
+collision_shoulder_exclusion: 1.0                 # shoulder exception
+collision_hard_distance: 0.025
 
 # ============================
 # EE pos Cost Parameters
 # ============================
-# End-effector rollout cost. The terminal scale is an additional multiplier
-ee_position_weight: 7000.0
+ee_position_weight: 5000.0
 ee_orientation_weight: 0.0 # no orientation tracking
 
 

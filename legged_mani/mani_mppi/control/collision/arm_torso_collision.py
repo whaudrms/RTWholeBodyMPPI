@@ -20,9 +20,9 @@ class CollisionResult:
 class ArmTorsoCollision:
     """Evaluate three arm capsules against a torso-oriented box.
 
-    Uniform centerline samples provide lower and upper clearance bounds. The
-    soft cost uses their midpoint, while exact segment-to-box distance is only
-    evaluated when the bounds straddle the hard-clearance threshold.
+    Uniform centerline samples provide lower and upper clearance bounds. Exact
+    segment-to-box distance is evaluated only when the bounds straddle the
+    hard-clearance threshold.
     """
 
     def __init__(self, model: mujoco.MjModel, config: dict) -> None:
@@ -46,24 +46,11 @@ class ArmTorsoCollision:
         self.shoulder_exclusion = float(
             config.get("collision_shoulder_exclusion", 0.07)
         )
-        self.safe_distance = float(
-            config.get("collision_safe_distance", 0.05)
-        )
         self.hard_distance = float(
             config.get("collision_hard_distance", 0.005)
         )
-        self.soft_weight = float(
-            config.get("collision_soft_weight", 10000.0)
-        )
         if self.shoulder_exclusion < 0.0:
             raise ValueError("collision_shoulder_exclusion must be non-negative")
-        if self.hard_distance >= self.safe_distance:
-            raise ValueError(
-                "collision_hard_distance must be smaller than "
-                "collision_safe_distance"
-            )
-        if self.soft_weight < 0.0:
-            raise ValueError("collision_soft_weight must be non-negative")
 
         geom_name = config.get("collision_body_geom", "base_collision")
         self.body_geom_id = mujoco.mj_name2id(
@@ -262,7 +249,7 @@ class ArmTorsoCollision:
         flat_states: np.ndarray,
         arm_positions: np.ndarray,
     ) -> CollisionResult:
-        """Evaluate soft clearance and exact hard validity for three links."""
+        """Evaluate clearance estimates and hard validity for three links."""
         flat_states = np.asarray(flat_states, dtype=float)
         arm_positions = np.asarray(arm_positions, dtype=float)
         expected_shape = (len(flat_states), 4, 3)

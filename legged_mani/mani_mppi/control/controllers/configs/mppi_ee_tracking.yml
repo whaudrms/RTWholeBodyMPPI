@@ -13,7 +13,6 @@ seed: 42
 
 # Use the phase-aligned leg gait and current arm IK posture as the MPPI action
 # prior. The optimizer searches only for whole-body stabilizing corrections.
-nominal_from_gait: true
 gait_startup_blend_steps: 50
 
 # Original EE-tracking controller keeps the body at the stand keyframe and
@@ -30,7 +29,7 @@ arm_ik_tolerance: 0.0001
 arm_ik_smoothing: 0.3
 arm_ik_max_step: 0.04
 
-# Initialize the nominal control at the actual B2-Z1 stand keyframe.
+# Initial joint angle
 sampling_init:
   - 0.0
   - 0.7
@@ -49,17 +48,23 @@ sampling_init:
   - -0.6
   - 0.0
 
-# Contact dynamics
+# ============================
+# Contact Dynamics
+# ============================
 o_solref:
   - 0.02
   - 1.0
 rollout_cone: "pyramidal"
 
-# Spline sampling
+# ============================
+# Spline Parameters
+# ============================
 sample_type: "cubic"
 n_knots: 4
 
-# Exploration noise
+# ============================
+# Noise Parameters
+# ============================
 noise_sigma:
   - 0.03 # FR hip
   - 0.1  # FR thigh
@@ -84,9 +89,10 @@ gait_noise_scale:
   walk_fast: 1.0
   trot: 1.2
 
-# State cost. Base xyz remain unpenalized, matching the original EE tracker.
+# ============================
+# Cost Function Parameters
+# ============================
 Q_diag:
-  # Compact state error: [base xyz, RPY, joint q, base velocity, joint velocity].
   - 0.0    # base x
   - 0.0    # base y
   - 1000.0    # base z
@@ -132,7 +138,9 @@ Q_diag:
   - 0.0    # Z1 joint3 velocity
   - 0.0    # Z1 joint4 velocity
 
-# Control cost
+# ============================
+# Control Cost Matrix R
+# ============================
 R_diag:
   - 0.001
   - 0.001
@@ -151,18 +159,26 @@ R_diag:
   - 0.001
   - 0.001
 
-# Arm-to-torso collision model
+# ============================
+# Arm-to-torso Hard Collision Constraint
+# ============================
 collision_enabled: true
 collision_body_geom: "base_collision"
 disable_arm_torso_rollout_contact: true
 rollout_arm_root_body: "link00"
 collision_capsule_radii: [0.030, 0.030, 0.0375]
-collision_shoulder_exclusion: 0.07
-collision_safe_distance: 0.10
-collision_hard_distance: 0.005
-collision_soft_weight: 10000.0
+collision_shoulder_exclusion: 1.0
+collision_hard_distance: 0.025
 
-# EE rollout and terminal costs
-ee_position_weight: 7000.0
-ee_orientation_weight: 0.0
+
+# ============================
+# EE pos Cost Parameters
+# ============================
+ee_position_weight: 5000.0
+ee_orientation_weight: 0.0 # no orientation tracking
+
+
+# ============================
+# EE Terminal Cost Parameters
+# ============================
 ee_terminal_scale: 10.0

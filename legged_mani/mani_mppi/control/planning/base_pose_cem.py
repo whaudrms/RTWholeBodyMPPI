@@ -163,7 +163,7 @@ class CrossEntropyOptimizer:
 
             evaluations += self.num_samples
             iteration_best = int(np.argmin(costs))
-            if costs[iteration_best] < best_cost:
+            if best_solution is None or costs[iteration_best] < best_cost:
                 best_cost = float(costs[iteration_best])
                 best_solution = samples[iteration_best].copy()
                 best_metrics = {
@@ -175,10 +175,19 @@ class CrossEntropyOptimizer:
                     for name, values in normalized_metrics.items()
                 }
 
-            elite_indices = np.argpartition(
-                costs,
-                self.num_elites - 1,
-            )[:self.num_elites]
+            finite_indices = np.flatnonzero(np.isfinite(costs))
+            if not len(finite_indices):
+                # Keep the search distribution unchanged when the hard
+                # constraint rejects the complete iteration.
+                continue
+            elite_count = min(self.num_elites, len(finite_indices))
+            finite_costs = costs[finite_indices]
+            elite_indices = finite_indices[
+                np.argpartition(
+                    finite_costs,
+                    elite_count - 1,
+                )[:elite_count]
+            ]
             elites = samples[elite_indices]
             elite_mean = np.mean(elites, axis=0)
             elite_std = np.std(elites, axis=0)
@@ -192,8 +201,8 @@ class CrossEntropyOptimizer:
                 self.min_std,
             )
 
-        if best_solution is None or not np.isfinite(best_cost):
-            raise RuntimeError("CEM failed to produce a finite candidate")
+        if best_solution is None:
+            raise RuntimeError("CEM failed to produce a candidate")
         return CEMResult(
             solution=best_solution,
             cost=best_cost,
@@ -256,17 +265,11 @@ class KinematicBasePoseCEMPlanner:
         )
         self.xy_weight = float(config.get("cem_xy_weight", 6.0))
         self.height_weight = float(config.get("cem_height_weight", 3.0))
-        self.clearance_weight = float(
-            config.get("cem_clearance_weight", 2.0)
-        )
         self.joint_limit_weight = float(
             config.get("cem_joint_limit_weight", 1.0)
         )
         self.joint_limit_margin = float(
             config.get("cem_joint_limit_margin", 0.10)
-        )
-        self.collision_penalty = float(
-            config.get("cem_collision_penalty", 1e6)
         )
         self._validate_config()
 
@@ -317,9 +320,7 @@ class KinematicBasePoseCEMPlanner:
                 self.residual_weight,
                 self.xy_weight,
                 self.height_weight,
-                self.clearance_weight,
                 self.joint_limit_weight,
-                self.collision_penalty,
             ],
             dtype=float,
         )
@@ -431,19 +432,9 @@ class KinematicBasePoseCEMPlanner:
                 axis=1,
             )
             minimum_clearance = np.min(clearances, axis=1)
-            clearance_scale = max(self.arm_collision.safe_distance, 1e-6)
-            clearance_deficit = np.maximum(
-                self.arm_collision.safe_distance - clearances,
-                0.0,
-            ) / clearance_scale
-            clearance_cost = self.clearance_weight * np.sum(
-                clearance_deficit**2,
-                axis=1,
-            )
         else:
             collision_valid = np.ones(num_candidates, dtype=bool)
             minimum_clearance = np.full(num_candidates, np.inf)
-            clearance_cost = np.zeros(num_candidates, dtype=float)
 
         arm_range = (
             self.arm_kinematics.arm_joint_upper
@@ -484,10 +475,11 @@ class KinematicBasePoseCEMPlanner:
             + self.infeasible_penalty * (~feasible)
             + self.xy_weight * xy_ratio**2
             + self.height_weight * height_ratio**2
-            + clearance_cost
             + self.joint_limit_weight * joint_margin_deficit**2
-            + self.collision_penalty * (~collision_valid)
         )
+        # Collision is a hard constraint: invalid candidates cannot enter the
+        # CEM optimum or elite set while any valid candidate exists.
+        costs = np.where(collision_valid, costs, np.inf)
         return costs, {
             "residual": residuals,
             "collision_valid": collision_valid,

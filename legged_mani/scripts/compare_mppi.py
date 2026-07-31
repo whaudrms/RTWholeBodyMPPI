@@ -91,7 +91,6 @@ class RunLog:
     goal_index: np.ndarray
     qpos: np.ndarray
     qvel: np.ndarray
-    collision_safe_distance: float
     collision_hard_distance: float
     task_success: bool
 
@@ -321,7 +320,6 @@ def run_mode(mode: str, steps: int) -> RunLog:
         goal_index=goal_index_log,
         qpos=qpos_log,
         qvel=qvel_log,
-        collision_safe_distance=float(agent.collision_safe_distance),
         collision_hard_distance=float(agent.collision_hard_distance),
         task_success=bool(agent.task_success),
     )
@@ -743,13 +741,6 @@ def plot_diagnostics(
     axes[2].set_title("Base attitude magnitude")
     axes[2].set_ylabel(r"$\max(|roll|,|pitch|)$ [deg]")
 
-    axes[3].axhline(
-        logs[0].collision_safe_distance,
-        color="black",
-        linestyle="--",
-        linewidth=1.0,
-        label="safe distance",
-    )
     axes[3].axhline(
         logs[0].collision_hard_distance,
         color="black",

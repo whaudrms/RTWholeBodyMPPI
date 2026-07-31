@@ -1,8 +1,9 @@
-"""Visualize B2-Z1 arm-to-torso capsule clearance.
+"""Visualize the Locomani arm-to-torso hard collision constraint.
 
-The torso collision box and the three arm capsules match the geometry used by
-``mppi_locomani.MPPI._arm_torso_clearance``.  Move the four sliders to inspect
-how each arm link enters the soft-cost region or violates the hard clearance.
+The model, task target, arm FK, and collision classification follow the current
+``mppi_locomani.MPPI`` path. Move the four sliders to inspect whether any arm
+capsule violates the configured hard clearance. Locomani excludes invalid
+rollouts from the MPPI update.
 
 Examples
 --------
@@ -21,6 +22,7 @@ from __future__ import annotations
 import argparse
 from itertools import product
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import mujoco
@@ -32,135 +34,73 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = PACKAGE_ROOT / "mani_mppi/models/b2_z1_4dof.xml"
-DEFAULT_CONFIG = (
-    PACKAGE_ROOT
-    / "mani_mppi/control/controllers/configs/mppi_locomani.yml"
-)
+MANI_MPPI_ROOT = PACKAGE_ROOT / "mani_mppi"
+CONTROLLER_ROOT = MANI_MPPI_ROOT / "control/controllers"
+if str(PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_ROOT))
 
-ARM_JOINT_NAMES = ("joint1", "joint2", "joint3", "joint4")
-ARM_POINT_BODY_NAMES = ("link02", "link03", "link04")
+from mani_mppi.control.collision import ArmTorsoCollision  # noqa: E402
+from mani_mppi.control.kinematics.arm_kinematics import (
+    ARM_JOINT_NAMES,
+    ArmKinematics,
+)  # noqa: E402
+from mani_mppi.utils.tasks import get_task  # noqa: E402
+
+
+LOCOMANI_TASK = get_task("locomani")
+DEFAULT_MODEL = MANI_MPPI_ROOT / LOCOMANI_TASK["model_path"]
+DEFAULT_CONFIG = CONTROLLER_ROOT / LOCOMANI_TASK["config_path"]
+DEFAULT_EE_SITE = LOCOMANI_TASK.get("ee_site", "gripper_center")
 LINK_NAMES = ("upper arm", "forearm", "wrist")
-EE_SITE_NAME = "gripper_center"
 
-SAFE_COLOR = "#27ae60"
-SOFT_COLOR = "#f39c12"
+VALID_COLOR = "#27ae60"
 HARD_COLOR = "#c0392b"
 BODY_COLOR = "#5d6d7e"
+SAMPLE_COLOR = "#2980b9"
+HARD_MARGIN_COLOR = "#f39c12"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--keyframe", default="stand")
+    parser.add_argument(
+        "--keyframe",
+        help=(
+            "MuJoCo keyframe used for the base pose "
+            "(default: body_reference_keyframe from the Locomani config)"
+        ),
+    )
+    parser.add_argument(
+        "--goal-index",
+        type=int,
+        default=0,
+        help=(
+            "Locomani EE goal used to generate the initial arm pose "
+            "(default: 0; ignored when --arm-q is given)"
+        ),
+    )
     parser.add_argument(
         "--arm-q",
         nargs=4,
         type=float,
         metavar=("Q1", "Q2", "Q3", "Q4"),
-        help="Initial arm joint angles in radians (default: keyframe values)",
+        help=(
+            "Initial arm joint angles in radians "
+            "(default: Locomani IK solution for --goal-index)"
+        ),
     )
-    parser.add_argument("--save", type=Path, help="Save the initial pose as an image")
+    parser.add_argument(
+        "--save",
+        type=Path,
+        help="Save the initial pose as an image",
+    )
     parser.add_argument(
         "--no-show",
         action="store_true",
         help="Do not open the interactive window (useful with --save)",
     )
     return parser.parse_args()
-
-
-def named_ids(
-    model: mujoco.MjModel,
-    object_type: mujoco.mjtObj,
-    names: tuple[str, ...],
-) -> np.ndarray:
-    ids = np.asarray(
-        [mujoco.mj_name2id(model, object_type, name) for name in names],
-        dtype=int,
-    )
-    missing = [name for name, object_id in zip(names, ids) if object_id < 0]
-    if missing:
-        raise ValueError(f"Model is missing required names: {missing}")
-    return ids
-
-
-def closest_segment_aabb(
-    starts: np.ndarray,
-    ends: np.ndarray,
-    half_size: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return exact distances and closest points for segments and an AABB.
-
-    Inputs and returned closest points are in the AABB local frame.  This is
-    the same piecewise-quadratic minimization used by the locomani controller,
-    extended here to retain the closest points for drawing distance lines.
-    """
-    starts = np.asarray(starts, dtype=float)
-    ends = np.asarray(ends, dtype=float)
-    half_size = np.asarray(half_size, dtype=float)
-    if starts.shape != ends.shape or starts.ndim != 2 or starts.shape[1] != 3:
-        raise ValueError("starts and ends must both have shape (N, 3)")
-
-    direction = ends - starts
-    count = len(starts)
-    boundaries = np.stack((-half_size, half_size), axis=0)
-    numerator = boundaries[None, :, :] - starts[:, None, :]
-    denominator = direction[:, None, :]
-    crossings = np.divide(
-        numerator,
-        denominator,
-        out=np.zeros_like(numerator),
-        where=np.abs(denominator) > 1e-12,
-    ).reshape(count, 6)
-    crossings = np.clip(crossings, 0.0, 1.0)
-
-    knots = np.sort(
-        np.concatenate(
-            (np.zeros((count, 1)), crossings, np.ones((count, 1))), axis=1
-        ),
-        axis=1,
-    )
-    lower = knots[:, :-1]
-    upper = knots[:, 1:]
-    midpoint = 0.5 * (lower + upper)
-    midpoint_position = (
-        starts[:, None, :] + midpoint[:, :, None] * direction[:, None, :]
-    )
-    signs = np.where(
-        midpoint_position > half_size,
-        1.0,
-        np.where(midpoint_position < -half_size, -1.0, 0.0),
-    )
-    active = signs != 0.0
-    offset = starts[:, None, :] - signs * half_size
-    derivative_offset = np.sum(
-        active * direction[:, None, :] * offset, axis=2
-    )
-    derivative_scale = np.sum(
-        active * direction[:, None, :] ** 2, axis=2
-    )
-    stationary = np.divide(
-        -derivative_offset,
-        derivative_scale,
-        out=midpoint.copy(),
-        where=derivative_scale > 1e-16,
-    )
-    stationary = np.minimum(np.maximum(stationary, lower), upper)
-
-    segment_candidates = (
-        starts[:, None, :] + stationary[:, :, None] * direction[:, None, :]
-    )
-    box_candidates = np.clip(segment_candidates, -half_size, half_size)
-    delta = segment_candidates - box_candidates
-    squared_distances = np.sum(delta * delta, axis=2)
-    best = np.argmin(squared_distances, axis=1)
-    rows = np.arange(count)
-    return (
-        np.sqrt(squared_distances[rows, best]),
-        segment_candidates[rows, best],
-        box_candidates[rows, best],
-    )
 
 
 def box_vertices(
@@ -241,23 +181,26 @@ def draw_capsule(
     end: np.ndarray,
     radius: float,
     color: str,
+    *,
+    alpha: float = 0.45,
+    draw_centerline: bool = True,
+    surface_linewidth: float = 0.0,
 ) -> None:
     direction = end - start
     length = np.linalg.norm(direction)
     if length < 1e-12:
         return
+    unit = direction / length
     first, second = orthogonal_basis(direction)
-    theta = np.linspace(0.0, 2.0 * np.pi, 18)
+    theta = np.linspace(0.0, 2.0 * np.pi, 24)
+    radial = (
+        np.cos(theta)[:, None] * first
+        + np.sin(theta)[:, None] * second
+    )
     rings = np.stack(
         (
-            start[None, :] + radius * (
-                np.cos(theta)[:, None] * first
-                + np.sin(theta)[:, None] * second
-            ),
-            end[None, :] + radius * (
-                np.cos(theta)[:, None] * first
-                + np.sin(theta)[:, None] * second
-            ),
+            start[None, :] + radius * radial,
+            end[None, :] + radius * radial,
         ),
         axis=0,
     )
@@ -266,17 +209,42 @@ def draw_capsule(
         rings[:, :, 1],
         rings[:, :, 2],
         color=color,
-        alpha=0.45,
-        linewidth=0.0,
+        alpha=alpha,
+        linewidth=surface_linewidth,
         shade=True,
     )
-    axis.plot(
-        (start[0], end[0]),
-        (start[1], end[1]),
-        (start[2], end[2]),
-        color=color,
-        linewidth=3.0,
-    )
+
+    # Complete the swept-sphere geometry with one outward hemisphere at each
+    # endpoint. This matches the segment-plus-radius capsule used for clearance.
+    for center, phi in (
+        (start, np.linspace(0.5 * np.pi, np.pi, 10)),
+        (end, np.linspace(0.0, 0.5 * np.pi, 10)),
+    ):
+        cap = (
+            center[None, None, :]
+            + radius
+            * (
+                np.cos(phi)[:, None, None] * unit[None, None, :]
+                + np.sin(phi)[:, None, None] * radial[None, :, :]
+            )
+        )
+        axis.plot_surface(
+            cap[:, :, 0],
+            cap[:, :, 1],
+            cap[:, :, 2],
+            color=color,
+            alpha=alpha,
+            linewidth=surface_linewidth,
+            shade=True,
+        )
+    if draw_centerline:
+        axis.plot(
+            (start[0], end[0]),
+            (start[1], end[1]),
+            (start[2], end[2]),
+            color=color,
+            linewidth=3.0,
+        )
 
 
 class ClearanceVisualizer:
@@ -284,7 +252,8 @@ class ClearanceVisualizer:
         self,
         model_path: Path,
         config_path: Path,
-        keyframe: str,
+        keyframe: str | None,
+        goal_index: int,
         arm_q: np.ndarray | None,
     ) -> None:
         if not model_path.is_file():
@@ -296,39 +265,20 @@ class ClearanceVisualizer:
 
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.data = mujoco.MjData(self.model)
-        self.arm_joint_ids = named_ids(
-            self.model, mujoco.mjtObj.mjOBJ_JOINT, ARM_JOINT_NAMES
+        self.arm_kinematics = ArmKinematics(
+            self.model,
+            config,
+            ee_site_name=DEFAULT_EE_SITE,
         )
-        self.arm_qpos_addresses = self.model.jnt_qposadr[self.arm_joint_ids]
-        self.arm_body_ids = named_ids(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, ARM_POINT_BODY_NAMES
-        )
-        self.ee_site_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_SITE, EE_SITE_NAME
-        )
-        if self.ee_site_id < 0:
-            raise ValueError(f"Model is missing EE site: {EE_SITE_NAME}")
+        self.collision = ArmTorsoCollision(self.model, config)
+        self.arm_qpos_addresses = self.arm_kinematics.arm_qpos_indices
+        self.body_geom_id = self.collision.body_geom_id
+        self.body_half_size = self.collision.body_half_size
+        self.capsule_radii = self.collision.capsule_radii
+        self.shoulder_exclusion = self.collision.shoulder_exclusion
+        self.hard_distance = self.collision.hard_distance
 
-        geom_name = config.get("collision_body_geom", "base_collision")
-        self.body_geom_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name
-        )
-        if self.body_geom_id < 0:
-            raise ValueError(f"Model is missing collision geom: {geom_name}")
-        if self.model.geom_type[self.body_geom_id] != mujoco.mjtGeom.mjGEOM_BOX:
-            raise ValueError("collision_body_geom must be a box")
-
-        self.body_half_size = self.model.geom_size[self.body_geom_id, :3].copy()
-        self.capsule_radii = np.asarray(
-            config.get("collision_capsule_radii", (0.030, 0.030, 0.0375)),
-            dtype=float,
-        )
-        self.shoulder_exclusion = float(
-            config.get("collision_shoulder_exclusion", 0.07)
-        )
-        self.safe_distance = float(config.get("collision_safe_distance", 0.05))
-        self.hard_distance = float(config.get("collision_hard_distance", 0.005))
-
+        keyframe = keyframe or config.get("body_reference_keyframe", "stand")
         keyframe_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_KEY, keyframe
         )
@@ -337,11 +287,25 @@ class ClearanceVisualizer:
         mujoco.mj_resetDataKeyframe(self.model, self.data, keyframe_id)
         self.base_qpos = self.data.qpos.copy()
         if arm_q is None:
-            self.arm_q = self.base_qpos[self.arm_qpos_addresses].copy()
+            goals = np.asarray(LOCOMANI_TASK["ee_goal_pos"], dtype=float)
+            if goal_index < 0 or goal_index >= len(goals):
+                raise ValueError(
+                    f"goal-index must be in [0, {len(goals) - 1}], "
+                    f"got {goal_index}"
+                )
+            self.goal_index: int | None = goal_index
+            self.goal_position = goals[goal_index].copy()
+            self.arm_q = self.arm_kinematics.solve_ik(
+                self.goal_position,
+                self.base_qpos,
+                strict=False,
+            )
         else:
+            self.goal_index = None
+            self.goal_position = None
             self.arm_q = np.asarray(arm_q, dtype=float)
-        lower = self.model.jnt_range[self.arm_joint_ids, 0]
-        upper = self.model.jnt_range[self.arm_joint_ids, 1]
+        lower = self.arm_kinematics.arm_joint_lower
+        upper = self.arm_kinematics.arm_joint_upper
         if np.any(self.arm_q < lower) or np.any(self.arm_q > upper):
             raise ValueError(
                 f"arm-q {self.arm_q} is outside joint limits "
@@ -353,6 +317,8 @@ class ClearanceVisualizer:
         self.figure.subplots_adjust(left=0.05, right=0.98, top=0.94, bottom=0.24)
         self.sliders: list[Slider] = []
         self.last_clearances = np.zeros(3)
+        self.last_segment_valid = np.ones(3, dtype=bool)
+        self.last_exact_evaluations = 0
         self.draw(self.arm_q)
         self._add_sliders(lower, upper)
 
@@ -366,15 +332,26 @@ class ClearanceVisualizer:
         np.ndarray,
         np.ndarray,
         np.ndarray,
+        np.ndarray,
     ]:
         self.data.qpos[:] = self.base_qpos
         self.data.qpos[self.arm_qpos_addresses] = arm_q
         self.data.qvel[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
 
-        points = np.empty((4, 3), dtype=float)
-        points[:3] = self.data.xpos[self.arm_body_ids]
-        points[3] = self.data.site_xpos[self.ee_site_id]
+        points = self.arm_kinematics.batch_arm_fk(
+            self.data.qpos[None, :]
+        )[0][0]
+
+        # This is the exact helper call made by Locomani after FK. It owns the
+        # sampled bounds, ambiguous-case refinement, and hard-validity decision.
+        collision_result = self.collision.evaluate(
+            self.data.qpos[None, :],
+            points[None, :, :],
+        )
+
+        # Reconstruct only the helper's trimmed centerlines and uniform sample
+        # positions for display. Clearance and validity are never recomputed.
         starts = points[:3].copy()
         ends = points[1:].copy()
 
@@ -385,30 +362,26 @@ class ClearanceVisualizer:
 
         center = self.data.geom_xpos[self.body_geom_id].copy()
         rotation = self.data.geom_xmat[self.body_geom_id].reshape(3, 3).copy()
-        starts_local = (starts - center) @ rotation
-        ends_local = (ends - center) @ rotation
-        distances, closest_segment_local, closest_box_local = closest_segment_aabb(
-            starts_local, ends_local, self.body_half_size
+        samples_world = (
+            starts[:, None, :]
+            + self.collision.fast_alpha[None, :, None]
+            * (ends - starts)[:, None, :]
         )
-        clearances = distances - self.capsule_radii
-        closest_segment_world = closest_segment_local @ rotation.T + center
-        closest_box_world = closest_box_local @ rotation.T + center
+        self.last_exact_evaluations = collision_result.exact_evaluations
         return (
             points,
             starts,
             ends,
             center,
             rotation,
-            clearances,
-            np.stack((closest_segment_world, closest_box_world), axis=1),
+            collision_result.clearance[0],
+            collision_result.segment_valid[0],
+            samples_world,
         )
 
-    def clearance_color(self, clearance: float) -> str:
-        if clearance < self.hard_distance:
-            return HARD_COLOR
-        if clearance < self.safe_distance:
-            return SOFT_COLOR
-        return SAFE_COLOR
+    @staticmethod
+    def clearance_color(valid: bool) -> str:
+        return VALID_COLOR if valid else HARD_COLOR
 
     def draw(self, arm_q: np.ndarray) -> None:
         self.axis.clear()
@@ -419,9 +392,11 @@ class ClearanceVisualizer:
             center,
             rotation,
             clearances,
-            closest_pairs,
+            segment_valid,
+            samples_world,
         ) = self.arm_geometry(arm_q)
         self.last_clearances = clearances
+        self.last_segment_valid = segment_valid
 
         draw_box(
             self.axis,
@@ -430,30 +405,6 @@ class ClearanceVisualizer:
             self.body_half_size,
             BODY_COLOR,
             alpha=0.28,
-        )
-
-        # This box is a conservative visual envelope. The exact safe region is
-        # the rounded Minkowski sum of the torso box and capsule radius.
-        max_radius = float(np.max(self.capsule_radii))
-        draw_box(
-            self.axis,
-            center,
-            rotation,
-            self.body_half_size + max_radius + self.safe_distance,
-            SOFT_COLOR,
-            alpha=0.65,
-            wire_only=True,
-            linestyle="--",
-        )
-        draw_box(
-            self.axis,
-            center,
-            rotation,
-            self.body_half_size + max_radius + self.hard_distance,
-            HARD_COLOR,
-            alpha=0.65,
-            wire_only=True,
-            linestyle=":",
         )
 
         excluded_end = starts[0]
@@ -467,29 +418,54 @@ class ClearanceVisualizer:
             alpha=0.6,
         )
 
-        for index, (start, end, radius, clearance) in enumerate(
-            zip(starts, ends, self.capsule_radii, clearances)
-        ):
-            color = self.clearance_color(float(clearance))
-            draw_capsule(self.axis, start, end, float(radius), color)
-            segment_point, box_point = closest_pairs[index]
-            self.axis.plot(
-                (segment_point[0], box_point[0]),
-                (segment_point[1], box_point[1]),
-                (segment_point[2], box_point[2]),
-                color=color,
-                linestyle="--",
-                linewidth=1.6,
+        for index, (
+            start,
+            end,
+            radius,
+            clearance,
+            valid,
+        ) in enumerate(
+            zip(
+                starts,
+                ends,
+                self.capsule_radii,
+                clearances,
+                segment_valid,
             )
-            label_position = 0.5 * (segment_point + box_point)
+        ):
+            color = self.clearance_color(bool(valid))
+            if self.hard_distance > 0.0:
+                draw_capsule(
+                    self.axis,
+                    start,
+                    end,
+                    float(radius + self.hard_distance),
+                    HARD_MARGIN_COLOR,
+                    alpha=0.10,
+                    draw_centerline=False,
+                    surface_linewidth=0.25,
+                )
+            draw_capsule(self.axis, start, end, float(radius), color)
+            label_position = 0.5 * (start + end)
             self.axis.text(
                 *label_position,
-                f"L{index + 1}: {1000.0 * clearance:.1f} mm",
+                f"L{index + 1}: d={1000.0 * clearance:.1f} mm",
                 color=color,
                 fontsize=9,
                 fontweight="bold",
             )
 
+        flat_samples = samples_world.reshape(-1, 3)
+        self.axis.scatter(
+            flat_samples[:, 0],
+            flat_samples[:, 1],
+            flat_samples[:, 2],
+            color=SAMPLE_COLOR,
+            edgecolors="white",
+            linewidths=0.35,
+            s=18,
+            depthshade=False,
+        )
         self.axis.scatter(
             points[:, 0], points[:, 1], points[:, 2], color="black", s=18
         )
@@ -498,17 +474,20 @@ class ClearanceVisualizer:
         all_points = np.vstack(
             (
                 points,
-                box_vertices(
-                    center,
-                    rotation,
-                    self.body_half_size + max_radius + self.safe_distance,
-                ),
+                flat_samples,
+                box_vertices(center, rotation, self.body_half_size),
             )
         )
         minimum = all_points.min(axis=0)
         maximum = all_points.max(axis=0)
         midpoint = 0.5 * (minimum + maximum)
-        span = max(float(np.max(maximum - minimum)), 0.5) * 1.2
+        envelope_radius = float(
+            np.max(self.capsule_radii) + max(self.hard_distance, 0.0)
+        )
+        span = max(
+            float(np.max(maximum - minimum)) + 2.0 * envelope_radius,
+            0.5,
+        ) * 1.2
         self.axis.set_xlim(midpoint[0] - span / 2.0, midpoint[0] + span / 2.0)
         self.axis.set_ylim(midpoint[1] - span / 2.0, midpoint[1] + span / 2.0)
         self.axis.set_zlim(midpoint[2] - span / 2.0, midpoint[2] + span / 2.0)
@@ -517,18 +496,31 @@ class ClearanceVisualizer:
         self.axis.set_ylabel("world y [m]")
         self.axis.set_zlabel("world z [m]")
         self.axis.set_title(
-            "Arm capsule-to-torso clearance\n"
-            f"soft < {1000.0 * self.safe_distance:.1f} mm, "
-            f"hard < {1000.0 * self.hard_distance:.1f} mm"
+            "Locomani arm-to-torso hard collision constraint\n"
+            f"valid iff d >= {1000.0 * self.hard_distance:.1f} mm "
+            f"| {self.collision.fast_samples} samples/segment, "
+            f"exact refinements={self.last_exact_evaluations}"
         )
         self.axis.view_init(elev=23.0, azim=-58.0)
+        legend_handles = [
+            Patch(color=VALID_COLOR, label="hard-valid"),
+            Patch(color=HARD_COLOR, label="hard violation"),
+            Patch(color=BODY_COLOR, label="torso collision box"),
+            Patch(color=SAMPLE_COLOR, label="fast centerline samples"),
+        ]
+        if self.hard_distance > 0.0:
+            legend_handles.append(
+                Patch(
+                    color=HARD_MARGIN_COLOR,
+                    alpha=0.35,
+                    label=(
+                        "hard margin: "
+                        f"+{1000.0 * self.hard_distance:.1f} mm"
+                    ),
+                )
+            )
         self.axis.legend(
-            handles=(
-                Patch(color=SAFE_COLOR, label="safe"),
-                Patch(color=SOFT_COLOR, label="soft-cost region"),
-                Patch(color=HARD_COLOR, label="hard violation"),
-                Patch(color=BODY_COLOR, label="torso collision box"),
-            ),
+            handles=legend_handles,
             loc="upper left",
         )
         self.figure.canvas.draw_idle()
@@ -555,23 +547,32 @@ class ClearanceVisualizer:
 
     def print_report(self) -> None:
         print(f"Arm q [rad]: {np.round(self.arm_q, 4)}")
+        if self.goal_index is not None:
+            print(
+                f"Locomani goal {self.goal_index}: "
+                f"{np.round(self.goal_position, 4)}"
+            )
         print(
-            f"Thresholds: safe={self.safe_distance:.4f} m, "
-            f"hard={self.hard_distance:.4f} m"
+            f"Hard constraint: enabled={self.collision.enabled}, "
+            f"d >= {self.hard_distance:.4f} m, "
+            f"fast_samples={self.collision.fast_samples}, "
+            f"exact_evaluations={self.last_exact_evaluations}"
         )
-        for name, radius, clearance in zip(
-            LINK_NAMES, self.capsule_radii, self.last_clearances
+        for name, radius, clearance, valid in zip(
+            LINK_NAMES,
+            self.capsule_radii,
+            self.last_clearances,
+            self.last_segment_valid,
         ):
-            if clearance < self.hard_distance:
-                status = "HARD VIOLATION"
-            elif clearance < self.safe_distance:
-                status = "soft-cost region"
-            else:
-                status = "safe"
+            status = "VALID" if valid else "HARD VIOLATION"
             print(
                 f"  {name:10s}: radius={radius:.4f} m, "
                 f"clearance={clearance:.4f} m ({status})"
             )
+        rollout_valid = bool(
+            not self.collision.enabled or np.all(self.last_segment_valid)
+        )
+        print(f"Pose accepted by Locomani hard mask: {rollout_valid}")
 
 
 def main() -> None:
@@ -580,6 +581,7 @@ def main() -> None:
         args.model,
         args.config,
         args.keyframe,
+        args.goal_index,
         None if args.arm_q is None else np.asarray(args.arm_q, dtype=float),
     )
     visualizer.print_report()

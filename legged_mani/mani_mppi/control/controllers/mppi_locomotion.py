@@ -5,7 +5,9 @@ import numpy as np
 
 # Local imports (ensure these are part of your package structure)
 from mani_mppi.utils.tasks import get_task
-from mani_mppi.control.controllers.base_controller import BaseMPPI
+from mani_mppi.control.controllers.whole_body_arm_controller import (
+    GaitNominalMPPI,
+)
 from mani_mppi.control.gait_scheduler.scheduler import GaitScheduler
 from mani_mppi.control.gait_scheduler.scheduler import Timer
 from mani_mppi.utils.transforms import batch_world_to_local_velocity, calculate_orientation_quaternion
@@ -29,7 +31,7 @@ GAIT_WALK_FAST_PATH = os.path.join(
     GAIT_DIR, "FAST/b2_retargeted/walking_gait_raibert_FAST_0_1_15cm_100hz.tsv"
 )
 
-class MPPI(BaseMPPI):
+class MPPI(GaitNominalMPPI):
     """
     Model Predictive Path Integral (MPPI) Controller for quadruped robots.
 
@@ -91,31 +93,7 @@ class MPPI(BaseMPPI):
         self.R = np.diag(np.array(params['R_diag']))
         self.cost_func = self.calculate_total_cost
         self.nominal_from_gait = bool(params.get('nominal_from_gait', True))
-        rollout_modes = (
-            None,
-            'noise_spline',
-            'original',
-            'original_spline',
-            'safe_spline',
-        )
-        if rollout_mode not in rollout_modes:
-            raise ValueError(
-                "rollout_mode must be None, 'noise_spline', 'original', "
-                "'original_spline', or 'safe_spline'"
-            )
-        if rollout_mode == 'noise_spline':
-            self.nominal_from_gait = True
-            self.sample_type = 'cubic'
-        elif rollout_mode == 'original':
-            self.nominal_from_gait = False
-            self.sample_type = 'cubic_original'
-        elif rollout_mode == 'original_spline':
-            self.nominal_from_gait = True
-            self.sample_type = 'cubic_gait_absolute'
-        elif rollout_mode == 'safe_spline':
-            self.nominal_from_gait = True
-            self.sample_type = 'cubic_gait_residual'
-        self.rollout_mode = rollout_mode or 'configured'
+        self._configure_rollout_mode(rollout_mode)
         self.gait_startup_blend_steps = int(
             params.get('gait_startup_blend_steps', 50)
         )
@@ -157,56 +135,6 @@ class MPPI(BaseMPPI):
         print(f"Initial gait {self.desired_gait[self.goal_index]}")
         print(f"Rollout mode: {self.rollout_mode} ({self.sample_type})")
 
-    def _rollout_spline_indices(self):
-        """Return unique, horizon-aligned knot indices for spline modes."""
-        indices = np.rint(
-            np.linspace(0, self.horizon - 1, self.n_knots)
-        ).astype(int)
-        if len(indices) < 2:
-            raise ValueError("n_knots must be at least 2 for spline sampling")
-        if len(np.unique(indices)) != len(indices):
-            raise ValueError(
-                "n_knots must not produce duplicate horizon indices"
-            )
-        return indices
-
-    def _sample_gait_absolute_spline(self):
-        """Spline the complete gait/residual warm start plus knot noise."""
-        from scipy.interpolate import CubicSpline
-
-        indices = self._rollout_spline_indices()
-        noise = self.generate_noise(
-            (self.n_samples, len(indices), self.act_dim)
-        )
-        knot_actions = self.trajectory[indices][None, :, :] + noise
-        actions = CubicSpline(indices, knot_actions, axis=1)(
-            np.arange(self.horizon)
-        )
-        return np.clip(actions, self.act_min, self.act_max)
-
-    def _sample_gait_residual_spline(self):
-        """Preserve the gait and spline only warm residuals plus knot noise."""
-        from scipy.interpolate import CubicSpline
-
-        indices = self._rollout_spline_indices()
-        noise = self.generate_noise(
-            (self.n_samples, len(indices), self.act_dim)
-        )
-        knot_corrections = self.gait_correction[indices][None, :, :] + noise
-        smooth_corrections = CubicSpline(
-            indices, knot_corrections, axis=1
-        )(np.arange(self.horizon))
-        actions = self.gait_nominal[None, :, :] + smooth_corrections
-        return np.clip(actions, self.act_min, self.act_max)
-
-    def perturb_action(self):
-        """Generate candidates according to the selected rollout mode."""
-        if getattr(self, 'rollout_mode', None) == 'original_spline':
-            return self._sample_gait_absolute_spline()
-        if getattr(self, 'rollout_mode', None) == 'safe_spline':
-            return self._sample_gait_residual_spline()
-        return super().perturb_action()
-    
     def next_goal(self):
         """
         Progress to the next goal based on the task sequence.
@@ -245,16 +173,7 @@ class MPPI(BaseMPPI):
         if not self.task_success:
             self.set_noise_for_gait(self.desired_gait[self.goal_index])
 
-    def _gait_blend(self):
-        """Return one startup blend factor for each point in the horizon."""
-        if self.gait_startup_blend_steps == 0:
-            return np.ones(self.horizon)
-        horizon_steps = self._gait_nominal_step + np.arange(self.horizon)
-        return np.clip(
-            horizon_steps / self.gait_startup_blend_steps, 0.0, 1.0
-        )
-
-    def _build_gait_reference(self):
+    def _joint_reference(self):
         """Build the phase-aligned, startup-blended [q, dq] gait horizon."""
         indices = self.gait_scheduler.indices[:self.horizon]
         gait_reference = self.gait_scheduler.gait[:, indices].copy()
@@ -278,48 +197,6 @@ class MPPI(BaseMPPI):
         gait_reference[self.act_dim:] *= blend[None, :]
         return gait_reference
 
-    def _reset_gait_nominal(self, blend_source=None):
-        """Reset the gait prior and its warm-started correction trajectory."""
-        self._gait_nominal_step = 0
-        self.gait_correction = np.zeros((self.horizon, self.act_dim))
-        if blend_source is None:
-            blend_source = np.repeat(
-                self.sampling_init[None, :], self.horizon, axis=0
-            )
-        blend_source = np.asarray(blend_source, dtype=float)
-        if blend_source.shape != (self.horizon, self.act_dim):
-            raise ValueError(
-                "gait blend source must have shape "
-                f"({self.horizon}, {self.act_dim}), got {blend_source.shape}"
-            )
-        self._gait_blend_source = blend_source.copy()
-
-        if self.nominal_from_gait:
-            self.joints_ref = self._build_gait_reference()
-            self.gait_nominal = self.joints_ref[:self.act_dim].T.copy()
-            self.trajectory = self.gait_nominal.copy()
-            self.selected_trajectory = self.trajectory.copy()
-
-    def _advance_gait_nominal(self, updated_actions, nominal_actions):
-        """Warm-start corrections while advancing the nominal gait phase."""
-        selected_correction = updated_actions - nominal_actions
-        self.gait_correction[:-1] = selected_correction[1:]
-        # The new horizon tail has no optimized predecessor.  Seed it with
-        # the future gait itself instead of repeating the last action.
-        self.gait_correction[-1] = 0.0
-
-        self.gait_scheduler.roll()
-        self._gait_nominal_step += 1
-        self._gait_blend_source[:-1] = self._gait_blend_source[1:]
-        self._gait_blend_source[-1] = self._gait_blend_source[-2]
-        next_reference = self._build_gait_reference()
-        self.gait_nominal = next_reference[:self.act_dim].T.copy()
-        self.trajectory = np.clip(
-            self.gait_nominal + self.gait_correction,
-            self.act_min,
-            self.act_max,
-        )
-        
     def update(self, obs):
         """
         Update the MPPI controller based on the current observation.
@@ -354,7 +231,7 @@ class MPPI(BaseMPPI):
 
         # Update joint references from the gait scheduler
         if self.internal_ref:
-            self.joints_ref = self._build_gait_reference()
+            self.joints_ref = self._joint_reference()
         nominal_actions = self.joints_ref[:self.act_dim].T
 
         # Calculate costs for each sampled trajectory

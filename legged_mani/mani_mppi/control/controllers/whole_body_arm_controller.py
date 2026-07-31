@@ -50,12 +50,8 @@ HEIGHT_GAIT_PATHS = {
 }
 
 
-class WholeBodyArmMPPI(BaseMPPI):
-    """Common mechanics for locomani and push-box task controllers.
-
-    Task controllers intentionally retain their own ``update`` and cost
-    functions so the MPPI flow remains visible where each task is defined.
-    """
+class GaitNominalMPPI(BaseMPPI):
+    """Shared gait-prior sampling and warm-start mechanics for MPPI."""
 
     def _configure_rollout_mode(self, rollout_mode) -> None:
         """Select one of the shared gait/action warm-start samplers."""
@@ -155,6 +151,69 @@ class WholeBodyArmMPPI(BaseMPPI):
             candidate = self.gait_nominal + smooth_correction
         return np.clip(candidate, self.act_min, self.act_max)
 
+    def _gait_blend(self):
+        """Return one startup blend factor for each horizon point."""
+        if self.gait_startup_blend_steps == 0:
+            return np.ones(self.horizon)
+        horizon_steps = self._gait_nominal_step + np.arange(self.horizon)
+        return np.clip(
+            horizon_steps / self.gait_startup_blend_steps, 0.0, 1.0
+        )
+
+    def _joint_reference(self):
+        """Build the controller-specific phase-aligned [q, dq] reference."""
+        raise NotImplementedError
+
+    def _refresh_gait_nominal(self):
+        """Apply the latest gait phase to the nominal action trajectory."""
+        self.joints_ref = self._joint_reference()
+        self.gait_nominal = self.joints_ref[:self.act_dim].T.copy()
+        self.trajectory = np.clip(
+            self.gait_nominal + self.gait_correction,
+            self.act_min,
+            self.act_max,
+        )
+
+    def _reset_gait_nominal(self, blend_source=None):
+        """Reset the gait prior and its warm-started correction trajectory."""
+        self._gait_nominal_step = 0
+        self.gait_correction = np.zeros((self.horizon, self.act_dim))
+        if blend_source is None:
+            blend_source = np.repeat(
+                self.sampling_init[None, :], self.horizon, axis=0
+            )
+        blend_source = np.asarray(blend_source, dtype=float)
+        if blend_source.shape != (self.horizon, self.act_dim):
+            raise ValueError(
+                "gait blend source must have shape "
+                f"({self.horizon}, {self.act_dim}), got {blend_source.shape}"
+            )
+        self._gait_blend_source = blend_source.copy()
+
+        if self.nominal_from_gait:
+            self._refresh_gait_nominal()
+            self.selected_trajectory = self.trajectory.copy()
+
+    def _advance_gait_nominal(self, updated_actions, nominal_actions):
+        """Shift optimized corrections and advance the gait phase."""
+        selected_correction = updated_actions - nominal_actions
+        self.gait_correction[:-1] = selected_correction[1:]
+        self.gait_correction[-1] = 0.0
+
+        self.gait_scheduler.roll()
+        self._gait_nominal_step += 1
+        self._gait_blend_source[:-1] = self._gait_blend_source[1:]
+        self._gait_blend_source[-1] = self._gait_blend_source[-2]
+        self._refresh_gait_nominal()
+
+
+class WholeBodyArmMPPI(GaitNominalMPPI):
+    """Common arm, kinematics, and collision support for whole-body tasks.
+
+    Task controllers intentionally retain their own ``update`` and cost
+    functions so the MPPI flow remains visible where each task is defined.
+    """
+
     def _compact_robot_state_error(self, states, references):
         """Return the 44-D robot error without a dummy quaternion slot."""
         raw_error = states - references
@@ -213,9 +272,7 @@ class WholeBodyArmMPPI(BaseMPPI):
         self.collision_shoulder_exclusion = (
             self.arm_collision.shoulder_exclusion
         )
-        self.collision_safe_distance = self.arm_collision.safe_distance
         self.collision_hard_distance = self.arm_collision.hard_distance
-        self.collision_soft_weight = self.arm_collision.soft_weight
         self.collision_body_geom_id = self.arm_collision.body_geom_id
         self.collision_body_half_size = self.arm_collision.body_half_size
         self.collision_body_local_pos = self.arm_collision.body_local_pos
@@ -286,15 +343,6 @@ class WholeBodyArmMPPI(BaseMPPI):
         self.collision_exact_evaluations = result.exact_evaluations
         return result.clearance, result.segment_valid
 
-    def _gait_blend(self):
-        """Return one startup blend factor for each horizon point."""
-        if self.gait_startup_blend_steps == 0:
-            return np.ones(self.horizon)
-        horizon_steps = self._gait_nominal_step + np.arange(self.horizon)
-        return np.clip(
-            horizon_steps / self.gait_startup_blend_steps, 0.0, 1.0
-        )
-
     def _joint_reference(self):
         """Combine phase-aligned leg gait with the current arm IK prior."""
         if hasattr(self.gait_scheduler, "get_reference"):
@@ -327,48 +375,6 @@ class WholeBodyArmMPPI(BaseMPPI):
         ).T
         reference[self.act_dim:] *= blend[None, :]
         return reference
-
-    def _refresh_gait_nominal(self):
-        """Apply the latest gait phase and arm IK posture to the prior."""
-        self.joints_ref = self._joint_reference()
-        self.gait_nominal = self.joints_ref[:self.act_dim].T.copy()
-        self.trajectory = np.clip(
-            self.gait_nominal + self.gait_correction,
-            self.act_min,
-            self.act_max,
-        )
-
-    def _reset_gait_nominal(self, blend_source=None):
-        """Reset the whole-body gait prior and warm-started corrections."""
-        self._gait_nominal_step = 0
-        self.gait_correction = np.zeros((self.horizon, self.act_dim))
-        if blend_source is None:
-            blend_source = np.repeat(
-                self.sampling_init[None, :], self.horizon, axis=0
-            )
-        blend_source = np.asarray(blend_source, dtype=float)
-        if blend_source.shape != (self.horizon, self.act_dim):
-            raise ValueError(
-                "gait blend source must have shape "
-                f"({self.horizon}, {self.act_dim}), got {blend_source.shape}"
-            )
-        self._gait_blend_source = blend_source.copy()
-
-        if self.nominal_from_gait:
-            self._refresh_gait_nominal()
-            self.selected_trajectory = self.trajectory.copy()
-
-    def _advance_gait_nominal(self, updated_actions, nominal_actions):
-        """Shift optimized corrections and advance the gait phase."""
-        selected_correction = updated_actions - nominal_actions
-        self.gait_correction[:-1] = selected_correction[1:]
-        self.gait_correction[-1] = 0.0
-
-        self.gait_scheduler.roll()
-        self._gait_nominal_step += 1
-        self._gait_blend_source[:-1] = self._gait_blend_source[1:]
-        self._gait_blend_source[-1] = self._gait_blend_source[-2]
-        self._refresh_gait_nominal()
 
     @staticmethod
     def _quat_to_roll_pitch(quaternions):
