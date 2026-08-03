@@ -1,14 +1,25 @@
-"""Replay a joint-angle gait and draw foot trajectories in MuJoCo.
+"""Replay a gait reference and draw foot trajectories in MuJoCo.
 
 The gait is applied kinematically: the floating base stays at a named model
-keyframe while the 16 actuated joint positions are copied from the TSV.  This
-makes the viewer useful for checking reference data without controller or
-contact-dynamics effects.
+keyframe while the 16 actuated joint positions are copied from a TSV or from
+Locomani's height-conditioned gait interpolation. This makes the viewer useful
+for checking reference data without controller or contact-dynamics effects.
 
 Examples
 --------
-    python3 -m legged_mani.scripts.visualize_gait_trajectory
-    python3 -m legged_mani.scripts.visualize_gait_trajectory --headless
+Replay the default TSV::
+
+    python3 legged_mani/tests/visualize_gait_trajectory.py
+
+Replay the exact reference returned by Locomani's height interpolation::
+
+    python3 legged_mani/tests/visualize_gait_trajectory.py \
+        --gait-name walk_fast --height 0.40 --height-rate -0.10
+
+Validate without opening a viewer::
+
+    python3 legged_mani/tests/visualize_gait_trajectory.py \
+        --gait-name stance_hold --height 0.40 --headless
 """
 
 from __future__ import annotations
@@ -17,6 +28,7 @@ import argparse
 import threading
 import time
 from pathlib import Path
+import sys
 
 import mujoco
 import mujoco.viewer
@@ -24,6 +36,17 @@ import numpy as np
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+if str(PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_ROOT))
+
+from mani_mppi.control.controllers.whole_body_arm_controller import (  # noqa: E402
+    HEIGHT_GAIT_PATHS,
+)
+from mani_mppi.control.gait_scheduler.height_conditioned_scheduler import (  # noqa: E402
+    HeightConditionedGaitScheduler,
+)
+
+
 DEFAULT_MODEL = PACKAGE_ROOT / "mani_mppi/models/b2_z1_4dof.xml"
 DEFAULT_GAIT = (
     PACKAGE_ROOT
@@ -64,12 +87,41 @@ FOOT_COLORS = np.asarray(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--gait", type=Path, default=DEFAULT_GAIT)
+    gait_source = parser.add_mutually_exclusive_group()
+    gait_source.add_argument(
+        "--gait",
+        type=Path,
+        help=f"Replay one gait TSV directly (default: {DEFAULT_GAIT})",
+    )
+    gait_source.add_argument(
+        "--gait-name",
+        choices=sorted(HEIGHT_GAIT_PATHS),
+        help="Replay a height-interpolated Locomani gait bank",
+    )
+    parser.add_argument(
+        "--height",
+        type=float,
+        help="Interpolation/base height in meters (default: 0.40)",
+    )
+    parser.add_argument(
+        "--height-rate",
+        type=float,
+        default=0.0,
+        help="Height morphing rate in m/s (default: 0)",
+    )
+    parser.add_argument(
+        "--phase-time",
+        type=int,
+        default=0,
+        help="First gait phase index for interpolation mode (default: 0)",
+    )
     parser.add_argument(
         "--rate",
         type=float,
-        default=80.0,
-        help="Playback sample rate in Hz (default: 80)",
+        help=(
+            "Playback rate in Hz "
+            "(default: 80 for direct TSV, 100 for interpolation)"
+        ),
     )
     parser.add_argument(
         "--keyframe",
@@ -109,6 +161,47 @@ def load_gait(path: Path) -> np.ndarray:
     return gait
 
 
+def interpolate_gait_reference(
+    gait_name: str,
+    height: float,
+    height_rate: float,
+    phase_time: int,
+) -> tuple[np.ndarray, float, str]:
+    """Return the exact height-conditioned reference used by Locomani."""
+    scheduler = HeightConditionedGaitScheduler(
+        HEIGHT_GAIT_PATHS[gait_name],
+        name=gait_name,
+        phase_time=phase_time,
+    )
+    clamped_height = float(
+        np.clip(height, scheduler.min_height, scheduler.max_height)
+    )
+    gait = scheduler.get_reference(
+        clamped_height,
+        height_rate=height_rate,
+        horizon=scheduler.phase_length,
+    )
+    lower, upper, alpha, _span = scheduler._bracket(clamped_height)
+    lower_height = scheduler.heights[lower]
+    upper_height = scheduler.heights[upper]
+    lower_reference = scheduler.gaits[lower][:, scheduler.indices]
+    upper_reference = scheduler.gaits[upper][:, scheduler.indices]
+    linear_reference = (
+        (1.0 - alpha) * lower_reference + alpha * upper_reference
+    )
+    velocity_morph = gait[scheduler.position_dim:] - linear_reference[
+        scheduler.position_dim:
+    ]
+    description = (
+        f"interpolated {gait_name}: height={clamped_height:.4f} m, "
+        f"height_rate={height_rate:+.4f} m/s, "
+        f"bracket=[{lower_height:.6g}, {upper_height:.6g}] m, "
+        f"alpha={alpha:.6f}, phase_time={scheduler.phase_time}, "
+        f"max_velocity_morph={np.max(np.abs(velocity_morph)):.6g} rad/s"
+    )
+    return gait, clamped_height, description
+
+
 def named_ids(
     model: mujoco.MjModel, object_type: mujoco.mjtObj, names: tuple[str, ...]
 ) -> np.ndarray:
@@ -129,8 +222,11 @@ def apply_sample(
     keyframe_id: int,
     qpos_addresses: np.ndarray,
     dof_addresses: np.ndarray,
+    base_height: float | None = None,
 ) -> None:
     mujoco.mj_resetDataKeyframe(model, data, keyframe_id)
+    if base_height is not None:
+        data.qpos[2] = base_height
     data.qpos[qpos_addresses] = gait[:16, sample]
     data.qvel[dof_addresses] = gait[16:, sample]
     mujoco.mj_forward(model, data)
@@ -142,6 +238,7 @@ def compute_foot_trajectories(
     keyframe_id: int,
     joint_ids: np.ndarray,
     foot_ids: np.ndarray,
+    base_height: float | None = None,
 ) -> np.ndarray:
     data = mujoco.MjData(model)
     qpos_addresses = model.jnt_qposadr[joint_ids]
@@ -156,6 +253,7 @@ def compute_foot_trajectories(
             keyframe_id,
             qpos_addresses,
             dof_addresses,
+            base_height,
         )
         trajectories[sample] = data.site_xpos[foot_ids]
     return trajectories
@@ -306,13 +404,21 @@ def run_viewer(
     joint_ids: np.ndarray,
     rate: float,
     hide_ui: bool,
+    base_height: float | None = None,
 ) -> None:
     data = mujoco.MjData(model)
     qpos_addresses = model.jnt_qposadr[joint_ids]
     dof_addresses = model.jnt_dofadr[joint_ids]
     sample = 0
     apply_sample(
-        model, data, gait, sample, keyframe_id, qpos_addresses, dof_addresses
+        model,
+        data,
+        gait,
+        sample,
+        keyframe_id,
+        qpos_addresses,
+        dof_addresses,
+        base_height,
     )
 
     playback = {"paused": False, "step": 0, "reset": False}
@@ -382,6 +488,7 @@ def run_viewer(
                     keyframe_id,
                     qpos_addresses,
                     dof_addresses,
+                    base_height,
                 )
 
             with viewer.lock():
@@ -392,13 +499,37 @@ def run_viewer(
 
 def main() -> None:
     args = parse_args()
-    if args.rate <= 0.0:
-        raise ValueError("--rate must be positive")
     if not args.model.is_file():
         raise FileNotFoundError(args.model)
 
     model = mujoco.MjModel.from_xml_path(str(args.model.resolve()))
-    gait = load_gait(args.gait.resolve())
+    if args.gait_name is not None:
+        height = 0.40 if args.height is None else float(args.height)
+        gait, base_height, source_description = interpolate_gait_reference(
+            args.gait_name,
+            height,
+            args.height_rate,
+            args.phase_time,
+        )
+        rate = 100.0 if args.rate is None else float(args.rate)
+    else:
+        if (
+            args.height is not None
+            or args.height_rate != 0.0
+            or args.phase_time != 0
+        ):
+            raise ValueError(
+                "--height, --height-rate, and --phase-time require --gait-name"
+            )
+        gait_path = DEFAULT_GAIT if args.gait is None else args.gait
+        gait_path = gait_path.resolve()
+        gait = load_gait(gait_path)
+        base_height = None
+        source_description = f"TSV: {gait_path}"
+        rate = 80.0 if args.rate is None else float(args.rate)
+    if rate <= 0.0:
+        raise ValueError("--rate must be positive")
+
     joint_ids = named_ids(model, mujoco.mjtObj.mjOBJ_JOINT, JOINT_NAMES)
     foot_ids = named_ids(model, mujoco.mjtObj.mjOBJ_SITE, FOOT_NAMES)
     keyframe_id = mujoco.mj_name2id(
@@ -408,15 +539,32 @@ def main() -> None:
         raise ValueError(f"Unknown keyframe: {args.keyframe}")
 
     trajectories = compute_foot_trajectories(
-        model, gait, keyframe_id, joint_ids, foot_ids
+        model,
+        gait,
+        keyframe_id,
+        joint_ids,
+        foot_ids,
+        base_height,
     )
     print(f"Model: {args.model.resolve()}")
-    print(f"Gait:  {args.gait.resolve()}")
+    print(f"Gait source: {source_description}")
     print(f"Base keyframe: {args.keyframe}")
-    print_report(model, gait, joint_ids, foot_ids, trajectories, args.rate)
+    if base_height is not None:
+        print(f"Fixed base height: {base_height:.4f} m")
+        if args.height_rate != 0.0:
+            print(
+                "Note: height-rate morphing changes joint dq; this kinematic "
+                "viewer displays joint q and therefore has the same geometry "
+                "for different rates at a fixed height."
+            )
+    print_report(model, gait, joint_ids, foot_ids, trajectories, rate)
 
     if args.save_trajectory is not None:
-        save_trajectories(args.save_trajectory.resolve(), trajectories, args.rate)
+        save_trajectories(
+            args.save_trajectory.resolve(),
+            trajectories,
+            rate,
+        )
     if not args.headless:
         run_viewer(
             model,
@@ -424,8 +572,9 @@ def main() -> None:
             trajectories,
             keyframe_id,
             joint_ids,
-            args.rate,
+            rate,
             args.hide_ui,
+            base_height,
         )
 
 

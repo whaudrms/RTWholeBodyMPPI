@@ -84,10 +84,21 @@ noise_sigma:
   - 0.06 # Z1 joint4
 
 gait_noise_scale:
+  stance_hold: 0.6
   in_place: 1.0
   walk: 1.0
   walk_fast: 1.0
   trot: 1.2
+
+# Reduce exploration continuously as the measured EE approaches its target.
+# The configured gait scale is applied first, followed by these per-group
+# scales. Full exploration is restored immediately at or beyond far_error.
+dynamic_noise:
+  enabled: true
+  near_error: 0.03
+  far_error: 0.15
+  near_leg_scale: 0.20
+  near_arm_scale: 0.25
 
 # ============================
 # Cost Function Parameters

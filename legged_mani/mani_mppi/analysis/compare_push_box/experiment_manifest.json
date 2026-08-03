@@ -1,0 +1,58 @@
+{
+  "task": "push_box",
+  "box_target": [
+    3.0,
+    2.0,
+    0.19
+  ],
+  "modes": {
+    "arm_ik_nominal": "CEM and leg/base MPPI retained; arm is online IK nominal with arm exploration and arm objectives disabled",
+    "whole_body_mppi": "CEM and full leg/arm whole-body MPPI objective"
+  },
+  "rollout_mode": "safe_spline",
+  "seeds": [
+    42
+  ],
+  "mppi_seed_policy": "episode seed",
+  "cem_seed_policy": "episode seed + 1000",
+  "cem_timing_policy": "initial plan before t=0; later plans applied at next control boundary",
+  "episode_seconds": 30.0,
+  "steps_override": null,
+  "actual_steps": 3000,
+  "dt": 0.01,
+  "n_samples": 30,
+  "horizon": 40,
+  "latency_warmup_steps": 50,
+  "episode_cooldown_seconds": 30.0,
+  "execution_order_policy": "seed_then_mode",
+  "execution_order": [
+    {
+      "seed": 42,
+      "mode": "arm_ik_nominal"
+    },
+    {
+      "seed": 42,
+      "mode": "whole_body_mppi"
+    }
+  ],
+  "paired_initial_cem_plans": [
+    {
+      "seed": 42,
+      "mode": "arm_ik_nominal",
+      "base_xy": [
+        0.21135937352808654,
+        -0.1432759129781394
+      ],
+      "base_height": 0.3731796897773841
+    },
+    {
+      "seed": 42,
+      "mode": "whole_body_mppi",
+      "base_xy": [
+        0.21135937352808654,
+        -0.1432759129781394
+      ],
+      "base_height": 0.3731796897773841
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "task": "ee_tracking",
+  "modes": {
+    "arm_ik_nominal": "fixed IK arm; arm Q/R, EE, terminal, collision costs off",
+    "arm_fixed_same_cost": "fixed IK arm; objective identical to whole-body MPPI",
+    "whole_body_mppi": "leg and arm controls optimized with the full objective"
+  },
+  "targets": [
+    {
+      "index": 0,
+      "position": [
+        0.7664,
+        0.0,
+        0.85
+      ],
+      "quaternion": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "index": 1,
+      "position": [
+        0.704,
+        0.0,
+        0.3
+      ],
+      "quaternion": [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "seeds": [
+    42
+  ],
+  "episode_seconds": 10.0,
+  "steps_override": null,
+  "actual_steps": 1000,
+  "dt": 0.01,
+  "success_hold_seconds": 0.2,
+  "steady_window_seconds": 1.0,
+  "latency_warmup_steps": 50,
+  "n_samples": 30,
+  "horizon": 40,
+  "episode_cooldown_seconds": 30.0,
+  "execution_order_policy": "target_then_seed_then_mode",
+  "execution_order": [
+    {
+      "target_index": 0,
+      "seed": 42,
+      "mode": "arm_ik_nominal"
+    },
+    {
+      "target_index": 0,
+      "seed": 42,
+      "mode": "arm_fixed_same_cost"
+    },
+    {
+      "target_index": 0,
+      "seed": 42,
+      "mode": "whole_body_mppi"
+    },
+    {
+      "target_index": 1,
+      "seed": 42,
+      "mode": "arm_ik_nominal"
+    },
+    {
+      "target_index": 1,
+      "seed": 42,
+      "mode": "arm_fixed_same_cost"
+    },
+    {
+      "target_index": 1,
+      "seed": 42,
+      "mode": "whole_body_mppi"
+    }
+  ]
+}

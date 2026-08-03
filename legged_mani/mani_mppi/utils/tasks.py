@@ -119,23 +119,18 @@ TASKS = {
     },
     "ee_tracking": {
         "ee_site": "gripper_center",
-        # Independent copy of the EE waypoint sequence for the original
-        # fixed-body-reference tracker.
         "ee_goal_pos": [
-            [0.85, 0.00, 0.80],
-            [0.85, 0.00, 0.40],
-            [1.00, 0.00, 0.5],
-            [1.30, 1.00, 0.80],
+            [0.7664, 0.00, 0.85],
+
+            [0.7040, 0.00, 0.30],
         ],
         "ee_goal_quat": [
-            [1.0, 0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
         ],
         "ee_pos_thresh": 0.03,
         "ee_ori_thresh": 1.0,
-        "waiting_times": [20, 20, 20, 20],
+        "waiting_times": [20, 20],
 
         "model_path": DEFAULT_MODEL_PATH,
         "config_path": "configs/mppi_ee_tracking.yml",

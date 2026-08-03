@@ -81,6 +81,7 @@ class MPPI(WholeBodyArmMPPI):
 
         # Shared arm IK/FK, rollout sensors, and capsule-to-torso collision.
         self._configure_arm_system(params, self.ee_site_name)
+        self._configure_dynamic_noise(params)
 
         # The body reference pose comes from the selected MuJoCo keyframe.
         body_keyframe = params.get("body_reference_keyframe", "stand")
@@ -135,6 +136,105 @@ class MPPI(WholeBodyArmMPPI):
         print(f"IK arm reference: {np.round(self.arm_reference, 4)}")
         print(f"Rollout mode: {self.rollout_mode} ({self.sample_type})")
 
+    def _configure_dynamic_noise(self, params):
+        """Load EE-error-dependent exploration settings for this task only."""
+        config = params.get("dynamic_noise", {})
+        if not isinstance(config, dict):
+            raise ValueError("dynamic_noise must be a mapping")
+
+        self.dynamic_noise_enabled = bool(config.get("enabled", False))
+        self.dynamic_noise_near_error = float(config.get("near_error", 0.03))
+        self.dynamic_noise_far_error = float(config.get("far_error", 0.15))
+        self.dynamic_noise_near_leg_scale = float(
+            config.get("near_leg_scale", 0.20)
+        )
+        self.dynamic_noise_near_arm_scale = float(
+            config.get("near_arm_scale", 0.25)
+        )
+        if (
+            not np.isfinite(self.dynamic_noise_near_error)
+            or not np.isfinite(self.dynamic_noise_far_error)
+            or self.dynamic_noise_near_error < 0.0
+            or self.dynamic_noise_far_error <= self.dynamic_noise_near_error
+        ):
+            raise ValueError(
+                "dynamic_noise requires 0 <= near_error < far_error"
+            )
+        for name, scale in (
+            ("near_leg_scale", self.dynamic_noise_near_leg_scale),
+            ("near_arm_scale", self.dynamic_noise_near_arm_scale),
+        ):
+            if not np.isfinite(scale) or not 0.0 <= scale <= 1.0:
+                raise ValueError(
+                    f"dynamic_noise {name} must be between 0 and 1"
+                )
+
+        actuator_joint_ids = np.asarray(
+            self.model.actuator_trnid[:, 0], dtype=int
+        )
+        arm_joint_ids = np.asarray(
+            self.arm_kinematics.arm_joint_ids, dtype=int
+        )
+        self.dynamic_noise_arm_indices = np.flatnonzero(
+            np.isin(actuator_joint_ids, arm_joint_ids)
+        )
+        if len(self.dynamic_noise_arm_indices) != len(arm_joint_ids):
+            raise ValueError(
+                "Could not map every arm joint to one MPPI actuator"
+            )
+        self.dynamic_noise_leg_indices = np.setdiff1d(
+            np.arange(self.act_dim, dtype=int),
+            self.dynamic_noise_arm_indices,
+        )
+        self.dynamic_noise_position_error = float("inf")
+        self.dynamic_noise_leg_scale = 1.0
+        self.dynamic_noise_arm_scale = 1.0
+
+    def _dynamic_noise_scales(self, position_error):
+        """Return smooth leg/arm exploration scales for one EE error."""
+        position_error = float(position_error)
+        if not np.isfinite(position_error) or position_error < 0.0:
+            raise ValueError(
+                "EE position error must be finite and non-negative"
+            )
+        if not self.dynamic_noise_enabled:
+            return 1.0, 1.0
+
+        ratio = np.clip(
+            (
+                position_error - self.dynamic_noise_near_error
+            ) / (
+                self.dynamic_noise_far_error
+                - self.dynamic_noise_near_error
+            ),
+            0.0,
+            1.0,
+        )
+        smooth_ratio = ratio * ratio * (3.0 - 2.0 * ratio)
+        leg_scale = self.dynamic_noise_near_leg_scale + (
+            1.0 - self.dynamic_noise_near_leg_scale
+        ) * smooth_ratio
+        arm_scale = self.dynamic_noise_near_arm_scale + (
+            1.0 - self.dynamic_noise_near_arm_scale
+        ) * smooth_ratio
+        return float(leg_scale), float(arm_scale)
+
+    def _update_dynamic_noise(self, observation):
+        """Update effective sigma from the current measured EE error."""
+        ee_position, _ = self._ee_pose(observation)
+        target_position = self.ee_goal_pos[self.goal_index]
+        position_error = float(np.linalg.norm(ee_position - target_position))
+        leg_scale, arm_scale = self._dynamic_noise_scales(position_error)
+
+        # Rebuild from base sigma on every update. This preserves gait scaling
+        # and also keeps compare_mppi's fixed-arm base sigma exactly zero.
+        self.set_noise_for_gait(self.default_gait)
+        self.noise_sigma[self.dynamic_noise_leg_indices] *= leg_scale
+        self.noise_sigma[self.dynamic_noise_arm_indices] *= arm_scale
+        self.dynamic_noise_position_error = position_error
+        self.dynamic_noise_leg_scale = leg_scale
+        self.dynamic_noise_arm_scale = arm_scale
+
     def _update_arm_reference(self, observation):
         """Re-solve IK from the current body pose once per MPPI update."""
         self._update_arm_reference_to(
@@ -186,6 +286,7 @@ class MPPI(WholeBodyArmMPPI):
     def update(self, obs):
         """Sample, rollout, score, and update the MPPI action trajectory."""
         self.obs = np.asarray(obs, dtype=float)
+        self._update_dynamic_noise(self.obs)
         self._update_arm_reference(self.obs)
         if self.nominal_from_gait:
             # Arm IK changes every update, so refresh the whole-body prior
