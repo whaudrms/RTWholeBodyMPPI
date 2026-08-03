@@ -1,10 +1,10 @@
 """Compare CEM-guided push-box control with and without arm MPPI.
 
 Each ``(seed, mode)`` episode starts from a fresh controller and MuJoCo
-simulator. Both modes retain the same CEM base planner, adaptive gait, leg
-MPPI, box objective, initial state, and random seeds. The only ablation is
-whether the arm is sampled and optimized by MPPI or follows its online IK
-nominal directly.
+simulator. All modes retain the same CEM base planner, adaptive gait, leg
+MPPI, box objective, initial state, and random seeds. The ablations separate
+an arm with no objective, a fixed arm scored by the full objective, and a
+sampled arm optimized by the full whole-body objective.
 
 Examples
 --------
@@ -45,13 +45,19 @@ from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
 TASK = "push_box"
 ROLLOUT_MODE = "safe_spline"
-MODES = ("arm_ik_nominal", "whole_body_mppi")
+MODES = (
+    "arm_ik_nominal",
+    "arm_fixed_same_cost",
+    "whole_body_mppi",
+)
 LABELS = {
     "arm_ik_nominal": "Arm IK nominal",
+    "arm_fixed_same_cost": "Arm fixed (same cost)",
     "whole_body_mppi": "Whole-body MPPI",
 }
 COLORS = {
     "arm_ik_nominal": "#E69F00",
+    "arm_fixed_same_cost": "#009E73",
     "whole_body_mppi": "#0072B2",
 }
 DEFAULT_OUTPUT_DIR = (
@@ -106,6 +112,10 @@ class EpisodeLog:
     box_cost_weights: np.ndarray
     box_orientation_weight: float
     box_max_tilt: float
+    ee_position_weight: float
+    ee_orientation_weight: float
+    ee_terminal_scale: float
+    collision_enabled: bool
 
 
 def parse_integer_selection(value: str, *, name: str) -> list[int]:
@@ -247,13 +257,20 @@ def configure_mode(agent: MPPI, mode: str) -> tuple[np.ndarray, np.ndarray]:
     )
     if mode == "whole_body_mppi":
         return arm_indices, leg_indices
-    if mode != "arm_ik_nominal":
+    if mode not in {"arm_ik_nominal", "arm_fixed_same_cost"}:
         raise ValueError(f"Unknown comparison mode: {mode}")
 
+    # Both fixed-arm modes receive the same time-varying online IK nominal,
+    # but no sampled or warm-started arm correction.
     agent.base_noise_sigma[arm_indices] = 0.0
     agent.set_noise_for_gait(agent.default_gait)
     agent.gait_correction[:, arm_indices] = 0.0
+    if mode == "arm_fixed_same_cost":
+        return arm_indices, leg_indices
 
+    # The negative control is truly nominal-only: unlike the fixed-same-cost
+    # mode, its arm pose does not affect rollout selection through any arm
+    # state, control, EE, terminal, or collision objective.
     arm_q_weights = 6 + arm_indices
     arm_dq_weights = 28 + arm_indices
     agent.state_cost_weights[arm_q_weights] = 0.0
@@ -394,7 +411,7 @@ def run_episode(
                 cem_compute_seconds += elapsed
                 cem_plan_count += int(applied)
 
-            if spec.mode == "arm_ik_nominal":
+            if spec.mode in {"arm_ik_nominal", "arm_fixed_same_cost"}:
                 agent.gait_correction[:, arm_indices] = 0.0
             update_start = perf_counter()
             action = agent.update(observation)
@@ -508,6 +525,10 @@ def run_episode(
         box_cost_weights=agent.box_cost_weights.copy(),
         box_orientation_weight=float(agent.box_orientation_weight),
         box_max_tilt=float(agent.box_max_tilt),
+        ee_position_weight=float(agent.ee_position_weight),
+        ee_orientation_weight=float(agent.ee_orientation_weight),
+        ee_terminal_scale=float(agent.ee_terminal_scale),
+        collision_enabled=bool(agent.collision_enabled),
     )
 
 
@@ -521,6 +542,7 @@ def validate_fairness(logs: list[EpisodeLog]) -> None:
         if missing:
             raise RuntimeError(f"Seed {seed} is missing modes: {sorted(missing)}")
         nominal = by_mode["arm_ik_nominal"]
+        fixed = by_mode["arm_fixed_same_cost"]
         whole = by_mode["whole_body_mppi"]
         for name in (
             "initial_qpos",
@@ -535,15 +557,28 @@ def validate_fairness(logs: list[EpisodeLog]) -> None:
                 getattr(whole, name),
                 err_msg=f"{name} differs for paired seed {seed}",
             )
+            np.testing.assert_array_equal(
+                getattr(fixed, name),
+                getattr(whole, name),
+                err_msg=f"{name} differs for primary comparison seed {seed}",
+            )
         if (
             nominal.initial_plan_height != whole.initial_plan_height
+            or fixed.initial_plan_height != whole.initial_plan_height
             or nominal.cem_seed != whole.cem_seed
+            or fixed.cem_seed != whole.cem_seed
             or nominal.dt != whole.dt
+            or fixed.dt != whole.dt
             or nominal.n_samples != whole.n_samples
+            or fixed.n_samples != whole.n_samples
             or nominal.horizon != whole.horizon
+            or fixed.horizon != whole.horizon
             or nominal.box_orientation_weight
             != whole.box_orientation_weight
+            or fixed.box_orientation_weight
+            != whole.box_orientation_weight
             or nominal.box_max_tilt != whole.box_max_tilt
+            or fixed.box_max_tilt != whole.box_max_tilt
         ):
             raise RuntimeError(f"Common configuration differs for seed {seed}")
 
@@ -555,13 +590,55 @@ def validate_fairness(logs: list[EpisodeLog]) -> None:
             whole.base_noise_sigma[leg_indices],
             err_msg=f"Leg exploration differs for seed {seed}",
         )
+        np.testing.assert_array_equal(
+            fixed.base_noise_sigma[leg_indices],
+            whole.base_noise_sigma[leg_indices],
+            err_msg=f"Leg exploration differs for primary comparison seed {seed}",
+        )
         if np.any(nominal.base_noise_sigma[arm_indices] != 0.0):
             raise RuntimeError(f"Nominal arm has nonzero noise for seed {seed}")
+        if np.any(fixed.base_noise_sigma[arm_indices] != 0.0):
+            raise RuntimeError(f"Fixed arm has nonzero noise for seed {seed}")
         np.testing.assert_array_equal(
             nominal.control_cost_weights[leg_indices],
             whole.control_cost_weights[leg_indices],
             err_msg=f"Leg control objective differs for seed {seed}",
         )
+        np.testing.assert_array_equal(
+            fixed.state_cost_weights,
+            whole.state_cost_weights,
+            err_msg=f"State objective differs for primary comparison seed {seed}",
+        )
+        np.testing.assert_array_equal(
+            fixed.control_cost_weights,
+            whole.control_cost_weights,
+            err_msg=f"Control objective differs for primary comparison seed {seed}",
+        )
+        fixed_arm_objective = (
+            fixed.ee_position_weight,
+            fixed.ee_orientation_weight,
+            fixed.ee_terminal_scale,
+            fixed.collision_enabled,
+        )
+        whole_arm_objective = (
+            whole.ee_position_weight,
+            whole.ee_orientation_weight,
+            whole.ee_terminal_scale,
+            whole.collision_enabled,
+        )
+        if fixed_arm_objective != whole_arm_objective:
+            raise RuntimeError(
+                f"Arm objective differs for primary comparison seed {seed}"
+            )
+        if (
+            nominal.ee_position_weight != 0.0
+            or nominal.ee_orientation_weight != 0.0
+            or nominal.ee_terminal_scale != 0.0
+            or nominal.collision_enabled
+        ):
+            raise RuntimeError(
+                f"Nominal-only arm objective is still active for seed {seed}"
+            )
 
 
 def trajectory_path(log: EpisodeLog, output_dir: Path) -> Path:
@@ -739,7 +816,7 @@ def plot_time_series(
     axes[1, 0].set_xlabel("simulation time [s]")
     axes[1, 1].set_xlabel("simulation time [s]")
     figure.legend(
-        handles=mode_handles(), loc="upper center", ncol=2,
+        handles=mode_handles(), loc="upper center", ncol=len(MODES),
         frameon=False, bbox_to_anchor=(0.5, 0.97),
     )
     figure.suptitle(
@@ -848,6 +925,10 @@ def save_manifest(
                 "CEM and leg/base MPPI retained; arm is online IK nominal "
                 "with arm exploration and arm objectives disabled"
             ),
+            "arm_fixed_same_cost": (
+                "CEM and full whole-body objective retained; arm is online "
+                "IK nominal with arm exploration disabled"
+            ),
             "whole_body_mppi": (
                 "CEM and full leg/arm whole-body MPPI objective"
             ),
@@ -951,8 +1032,8 @@ def replay_episodes(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run paired CEM-guided push-box episodes for arm IK nominal "
-            "and whole-body MPPI."
+            "Run paired CEM-guided push-box episodes for arm IK nominal, "
+            "fixed-arm same-cost, and whole-body MPPI."
         )
     )
     parser.add_argument(

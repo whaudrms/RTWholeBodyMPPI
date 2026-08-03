@@ -7,6 +7,7 @@
   ],
   "modes": {
     "arm_ik_nominal": "CEM and leg/base MPPI retained; arm is online IK nominal with arm exploration and arm objectives disabled",
+    "arm_fixed_same_cost": "CEM and full whole-body objective retained; arm is online IK nominal with arm exploration disabled",
     "whole_body_mppi": "CEM and full leg/arm whole-body MPPI objective"
   },
   "rollout_mode": "safe_spline",
@@ -32,6 +33,10 @@
     },
     {
       "seed": 42,
+      "mode": "arm_fixed_same_cost"
+    },
+    {
+      "seed": 42,
       "mode": "whole_body_mppi"
     }
   ],
@@ -39,6 +44,15 @@
     {
       "seed": 42,
       "mode": "arm_ik_nominal",
+      "base_xy": [
+        0.21135937352808654,
+        -0.1432759129781394
+      ],
+      "base_height": 0.3731796897773841
+    },
+    {
+      "seed": 42,
+      "mode": "arm_fixed_same_cost",
       "base_xy": [
         0.21135937352808654,
         -0.1432759129781394
