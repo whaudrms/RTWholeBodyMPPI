@@ -44,7 +44,7 @@ from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
 
 TASK = "push_box"
-ROLLOUT_MODE = "safe_spline"
+ROLLOUT_MODE = "original_spline"
 MODES = (
     "arm_ik_nominal",
     "arm_fixed_same_cost",

@@ -56,6 +56,7 @@ from mani_mppi.utils.transforms import batch_world_to_local_velocity
 
 
 TASK = "ee_tracking"
+ROLLOUT_MODE = "original_spline"
 MODES = (
     "arm_ik_nominal",
     "arm_fixed_same_cost",
@@ -315,7 +316,7 @@ def run_episode(
     """Run one fixed-target episode from a fresh deterministic reset."""
     task_data = get_task(TASK)
     sim_path = PACKAGE_ROOT / "mani_mppi" / task_data["sim_path"]
-    agent = MPPI(task=TASK, rollout_mode="safe_spline")
+    agent = MPPI(task=TASK, rollout_mode=ROLLOUT_MODE)
     dt = float(agent.model.opt.timestep)
     steps = (
         int(steps_override)
@@ -1411,6 +1412,7 @@ def save_manifest(
     path = output_dir / "experiment_manifest.json"
     manifest = {
         "task": TASK,
+        "rollout_mode": ROLLOUT_MODE,
         "modes": {
             "arm_ik_nominal": (
                 "fixed IK arm; arm Q/R, EE, terminal, collision costs off"
