@@ -152,6 +152,50 @@ Run the MuJoCo box-pushing task:
 ```bash
 python simulate_mppi.py --task push_box
 ```
+
+### CUDA/Warp simulation backend
+
+The simulation controller can keep action sampling, batched MuJoCo rollout,
+all trajectory cost terms, MPPI weights, and the weighted action reduction on
+an NVIDIA GPU. This optional backend requires a CUDA-enabled JAX installation,
+MuJoCo/MJX 3.11 or newer, and `warp-lang`.
+
+For the original 30-sample configuration at a 25 Hz planner rate:
+
+```bash
+python simulate_mppi.py --task walk_straight --backend warp \
+  --samples 30 --horizon 40 --planner-rate 25
+```
+
+For a larger 128-sample batch, use a lower planner rate:
+
+```bash
+python simulate_mppi.py --task walk_straight --backend warp \
+  --samples 128 --horizon 40 --planner-rate 10
+```
+
+The RTX 3060 6 GB can also allocate `256 samples × horizon 80`, but its
+measured update time is about 110 ms. Use a 5 Hz planner rate so the 100 Hz
+simulation loop has sufficient deadline margin:
+
+```bash
+python simulate_mppi.py --task walk_straight --backend warp \
+  --samples 256 --horizon 80 --planner-rate 5
+```
+
+A short headless smoke test is available without opening plots:
+
+```bash
+python simulate_mppi.py --task stand --backend warp \
+  --samples 30 --horizon 40 --planner-rate 25 \
+  --steps 20 --headless --no-plot
+```
+
+The first planner update compiles and captures model-specific CUDA kernels;
+later updates replay the fixed-shape CUDA graph. Changing `samples` or
+`horizon` builds a new graph. The Warp backend is connected only to this
+MuJoCo simulation script; hardware scripts continue to use the CPU backend.
+
 ---
 ## Hardware
 ### Locomotion tasks
@@ -187,13 +231,17 @@ roslaunch legged_controllers bringup_hw.launch
 
 For locomotion:
 ```
-rosrun legged_mppi run_mppi_locomotion.py --task <task_name_hw> --pose_source <pose_source_name>
+rosrun legged_mppi run_mppi_locomotion.py --task <task_name_hw> --pose_source <pose_source_name> --control-rate 100 --planner-rate 25
 ```
 
 For locomanipulation:
 ```
-rosrun legged_mppi run_mppi_locomomanipulation.py
+rosrun legged_mppi run_mppi_locomanipulation.py --control-rate 100 --planner-rate 25
 ```
+
+The hardware command loop runs at 100 Hz while MPPI planning runs on a
+non-blocking worker at 25 Hz by default. The control rate must be an integer
+multiple of the planner rate.
 
 ### Available Tasks (Hardware)
 The following tasks can run on hardware:

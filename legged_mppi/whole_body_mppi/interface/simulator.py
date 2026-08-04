@@ -7,6 +7,10 @@ from scipy.spatial.transform import Rotation as R
 import tqdm
 from PIL import Image
 
+from whole_body_mppi.interface.viewer_compat import (
+    install_mjv_move_camera_compat,
+)
+
 class Simulator:
     """
     A class representing a simulator for controlling and estimating the state of a system.
@@ -43,7 +47,12 @@ class Simulator:
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.agent = agent
         self.ctrl_rate = ctrl_rate
-        self.update_ratio = max(1, 1/(dt*ctrl_rate))
+        rate_ratio = 1 / (dt * ctrl_rate)
+        self.update_ratio = max(1, int(round(rate_ratio)))
+        if abs(rate_ratio - self.update_ratio) > 1e-9:
+            raise ValueError(
+                "The simulation rate must be an integer multiple of ctrl_rate"
+            )
         self.interpolate_cam = False
         # model
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
@@ -76,6 +85,7 @@ class Simulator:
 
         # viewer
         if viewer:
+            install_mjv_move_camera_compat()
             self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data, hide_menus=True)
         else:
             self.viewer = None
@@ -139,6 +149,7 @@ class Simulator:
 
     def run(self):
         tqdm_range = tqdm.tqdm(range(self.T-1))
+        plan_origin_t = None
         for t in tqdm_range:
             self.t = t
             self.store_trajectory(t)
@@ -146,7 +157,16 @@ class Simulator:
 
             if self.agent is not None:
                 if t % self.update_ratio == 0:
-                    action = self.agent.update(np.concatenate([self.data.qpos, self.data.qvel], axis=0))
+                    advance_steps = (
+                        0 if plan_origin_t is None else t - plan_origin_t
+                    )
+                    self.agent.update(
+                        np.concatenate([self.data.qpos, self.data.qvel], axis=0),
+                        advance_steps=advance_steps,
+                    )
+                    plan_origin_t = t
+                plan_index = min(t - plan_origin_t, self.agent.horizon - 1)
+                action = self.agent.selected_trajectory[plan_index]
                 self.data.ctrl = action
 
             mujoco.mj_step(self.model, self.data)

@@ -28,7 +28,7 @@ class MPPI_box_push(BaseMPPI):
         - MPPI sampling and cost calculation configurations.
     """
 
-    def __init__(self, task='push_box') -> None:
+    def __init__(self, task='push_box', backend='cpu') -> None:
         """
         Initialize the MPPI controller with task-specific configurations.
 
@@ -54,7 +54,7 @@ class MPPI_box_push(BaseMPPI):
         MODEL_PATH = os.path.join(BASE_DIR, "../..", model_path)
 
         # Initialize base MPPI
-        super().__init__(MODEL_PATH, CONFIG_PATH)
+        super().__init__(MODEL_PATH, CONFIG_PATH, backend=backend)
 
         # load the configuration file
         with open(CONFIG_PATH, 'r') as file:
@@ -91,6 +91,7 @@ class MPPI_box_push(BaseMPPI):
                                         np.zeros(4)))
         
         self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
+        self._planned_gait_scheduler = None
         self.task_success = False
         self.box_state = np.zeros(13) 
         self.robot_state = np.zeros(37) 
@@ -145,7 +146,7 @@ class MPPI_box_push(BaseMPPI):
         self.box_state[:7] = observation[:7]
         self.next_goal()
         
-    def update(self, obs):
+    def update(self, obs, advance_steps=1):
         """
         Update the MPPI controller based on the current observation.
 
@@ -154,8 +155,14 @@ class MPPI_box_push(BaseMPPI):
         Returns:
             np.ndarray: Selected action based on the optimal trajectory.
         """
-         # Generate perturbed actions for rollouts
-        actions = self.perturb_action()
+        elapsed_steps = self.prepare_planner_update(advance_steps)
+        if (
+            elapsed_steps
+            and self._planned_gait_scheduler is self.gait_scheduler
+        ):
+            self.gait_scheduler.advance(elapsed_steps)
+        self._planned_gait_scheduler = self.gait_scheduler
+
         self.obs = obs
 
         # Update the robot and box states
@@ -175,19 +182,34 @@ class MPPI_box_push(BaseMPPI):
             self.goal_ori = np.array([1,0,0,0])
 
         self.body_ref[3:7] = self.goal_ori
-        self.rollout_func(self.state_rollouts, actions, np.repeat(np.array([np.concatenate([[0],self.obs])]), self.n_samples, axis=0), num_workers=self.num_workers, nstep=self.horizon)
-        
+
         if self.internal_ref:
             self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
-        
+
+        if self.backend == "warp":
+            backend = self.get_warp_backend("push_box")
+            updated_actions, weights, min_cost = backend.update(
+                obs,
+                self.trajectory,
+                self.noise_sigma,
+                self.joints_ref,
+                self.body_ref,
+                box_ref=self.x_box_ref,
+                q_box=self.Q_box,
+            )
+            self.exp_weights = weights
+            self.cached_best_cost = min_cost
+            self.complete_planner_update(updated_actions)
+            return updated_actions[0]
+
+        actions = self.perturb_action()
+        self.rollout_func(self.state_rollouts, actions, np.repeat(np.array([np.concatenate([[0],self.obs])]), self.n_samples, axis=0), num_workers=self.num_workers, nstep=self.horizon)
+
         costs_sum = self.cost_func(self.state_rollouts[:,:,np.r_[8:27, 33:51]],\
                                    self.state_rollouts[:,:,np.r_[1:8, 27:33]],\
                                    actions, 
                                    self.joints_ref, self.body_ref)
         self.cached_best_cost = float(np.min(costs_sum))
-
-        # Update the gait scheduler
-        self.gait_scheduler.roll()
 
         # Calculate MPPI weights for the samples
         min_cost = np.min(costs_sum)
@@ -203,9 +225,7 @@ class MPPI_box_push(BaseMPPI):
         updated_actions = np.clip(weighted_delta_u, self.act_min, self.act_max)
 
         # Update the trajectory with the optimal action
-        self.selected_trajectory = updated_actions
-        self.trajectory = np.roll(updated_actions, shift=-1, axis=0)
-        self.trajectory[-1] = updated_actions[-1]
+        self.complete_planner_update(updated_actions)
 
         # Return the first action in the trajectory as the output action
         return updated_actions[0]

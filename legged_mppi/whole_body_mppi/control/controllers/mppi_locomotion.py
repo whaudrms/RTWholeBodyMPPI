@@ -30,7 +30,7 @@ class MPPI(BaseMPPI):
         - MPPI sampling and cost calculation configurations.
     """
 
-    def __init__(self, task='stand') -> None:
+    def __init__(self, task='stand', backend='cpu') -> None:
         """
         Initialize the MPPI controller with task-specific configurations.
 
@@ -57,7 +57,7 @@ class MPPI(BaseMPPI):
         MODEL_PATH = os.path.join(BASE_DIR, "../..", model_path)
 
         # Initialize base MPPI
-        super().__init__(MODEL_PATH, CONFIG_PATH)
+        super().__init__(MODEL_PATH, CONFIG_PATH, backend=backend)
 
         # load the configuration file
         with open(CONFIG_PATH, 'r') as file:
@@ -68,6 +68,7 @@ class MPPI(BaseMPPI):
 
         # Set initial parameters and state
         self.obs = None
+        self.cached_best_cost = None
         self.internal_ref = True
         self.exp_weights = np.ones(self.n_samples) / self.n_samples  # Initial MPPI weights
         self.waiting_times = waiting_times
@@ -91,18 +92,19 @@ class MPPI(BaseMPPI):
                                         np.zeros(4)))
         
         self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
+        self._planned_gait_scheduler = None
         self.task_success = False
 
         # Debug information
         print(f"Initial goal {self.goal_index}: {self.goal_pos[self.goal_index] }")
         print(f"Initial gait {self.desired_gait[self.goal_index]}")
     
-    def next_goal(self):
+    def next_goal(self, advance_steps=1):
         """
         Progress to the next goal based on the task sequence.
         Updates the internal reference trajectory and gait scheduler.
         """
-        self.timer.increment()
+        self.timer.increment(advance_steps)
 
         if self.goal_index < len(self.goal_pos) - 1 and self.timer.done:
             # Move to the next goal
@@ -130,7 +132,7 @@ class MPPI(BaseMPPI):
             elif self.desired_gait[self.goal_index] in ['trot']:
                 self.noise_sigma = np.array([0.06, 0.2, 0.2] * 4)
         
-    def update(self, obs):
+    def update(self, obs, advance_steps=1):
         """
         Update the MPPI controller based on the current observation.
 
@@ -139,8 +141,14 @@ class MPPI(BaseMPPI):
         Returns:
             np.ndarray: Selected action based on the optimal trajectory.
         """
-         # Generate perturbed actions for rollouts
-        actions = self.perturb_action()
+        elapsed_steps = self.prepare_planner_update(advance_steps)
+        if (
+            elapsed_steps
+            and self._planned_gait_scheduler is self.gait_scheduler
+        ):
+            self.gait_scheduler.advance(elapsed_steps)
+        self._planned_gait_scheduler = self.gait_scheduler
+
         self.obs = obs
 
         # Calculate the direction and distance to the goal
@@ -155,20 +163,36 @@ class MPPI(BaseMPPI):
 
         self.body_ref[3:7] = self.goal_ori
 
+        # Update joint references from the gait scheduler before either the
+        # CPU or GPU cost path consumes them.
+        if self.internal_ref:
+            self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
+
+        if self.backend == "warp":
+            backend = self.get_warp_backend("locomotion")
+            updated_actions, weights, min_cost = backend.update(
+                obs,
+                self.trajectory,
+                self.noise_sigma,
+                self.joints_ref,
+                self.body_ref,
+            )
+            self.exp_weights = weights
+            self.cached_best_cost = min_cost
+            self.complete_planner_update(updated_actions)
+            return updated_actions[0]
+
+        # Generate perturbed actions for CPU rollouts.
+        actions = self.perturb_action()
+
         # Perform rollouts using threaded rollout function
         self.rollout_func(self.state_rollouts, actions, np.repeat(
             np.array([np.concatenate([[0], obs])]), self.n_samples, axis=0), 
             num_workers=self.num_workers, nstep=self.horizon)
 
-        # Update joint references from the gait scheduler
-        if self.internal_ref:
-            self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
-
         # Calculate costs for each sampled trajectory
         costs_sum = self.cost_func(self.state_rollouts[:, :, 1:], actions, self.joints_ref, self.body_ref)
-
-        # Update the gait scheduler
-        self.gait_scheduler.roll()
+        self.cached_best_cost = float(np.min(costs_sum))
 
         # Calculate MPPI weights for the samples
         min_cost = np.min(costs_sum)
@@ -181,9 +205,7 @@ class MPPI(BaseMPPI):
         updated_actions = np.clip(weighted_delta_u, self.act_min, self.act_max)
 
         # Update the trajectory with the optimal action
-        self.selected_trajectory = updated_actions
-        self.trajectory = np.roll(updated_actions, shift=-1, axis=0)
-        self.trajectory[-1] = updated_actions[-1]
+        self.complete_planner_update(updated_actions)
 
         # Return the first action in the trajectory as the output action
         return updated_actions[0]
@@ -305,6 +327,8 @@ class MPPI(BaseMPPI):
         if self.obs is None:
             # If no observation is available, return None
             return None
+        elif self.backend == "warp":
+            return self.cached_best_cost
         else:
             # Create a rollout array for the best trajectory
             best_rollouts = np.zeros((1, self.horizon, mujoco.mj_stateSize(self.model, mujoco.mjtState.mjSTATE_FULLPHYSICS.value)))

@@ -1,5 +1,6 @@
 import numpy as np
 import concurrent.futures
+import inspect
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import mujoco
@@ -7,13 +8,16 @@ from scipy.interpolate import CubicSpline
 from mujoco import rollout
 import yaml
 
+
+_ROLLOUT_HAS_NROLL = "nroll" in inspect.signature(rollout.rollout).parameters
+
 class BaseMPPI:
     """
     Base class for Model Predictive Path Integral (MPPI) controllers.
     Provides shared functionality for all task-specific controllers.
     """
 
-    def __init__(self, model_path, config_path):
+    def __init__(self, model_path, config_path, backend="cpu"):
         """
         Initialize common MPPI parameters and configurations.
 
@@ -23,20 +27,48 @@ class BaseMPPI:
             config_path (str): Path to the configuration file.
         """
 
+        if backend not in ("cpu", "warp"):
+            raise ValueError("backend must be either 'cpu' or 'warp'")
+        self.backend = backend
+        self._warp_backend = None
+
         # Load task-specific configurations
         with open(config_path, 'r') as file:
             params = yaml.safe_load(file)
 
         # Load MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(model_path)
-        if self.model.nu != 12 or self.model.nq != 19 or self.model.nv != 18:
+        supported_state_sizes = ((19, 18), (26, 24))
+        if (
+            self.model.nu != 12
+            or (self.model.nq, self.model.nv) not in supported_state_sizes
+        ):
             raise ValueError(
-                "The locomotion controller requires a floating-base quadruped "
-                "model with 12 actuators (nq=19, nv=18, nu=12)."
+                "The controller requires a 12-actuator floating-base "
+                "quadruped, optionally preceded by one free prop body."
             )
         self.model.opt.timestep = params['dt']
-        self.model.opt.enableflags = 1  # Override contact settings
-        self.model.opt.o_solref = np.array(params['o_solref'])
+        if self.backend == "warp":
+            # MJX-Warp does not support mjENBL_OVERRIDE. Applying the same
+            # solref to every geom preserves the intended global contact
+            # setting without enabling the unsupported runtime override.
+            unsupported_bits = int(mujoco.mjtEnableBit.mjENBL_OVERRIDE)
+            # MULTICCD cannot be combined with the non-zero robot geom margin
+            # in MJX-Warp (notably in the push-box scene).
+            self.model.opt.enableflags &= ~unsupported_bits
+            self.model.opt.disableflags |= (
+                int(mujoco.mjtDisableBit.mjDSBL_MULTICCD)
+                | int(mujoco.mjtDisableBit.mjDSBL_NATIVECCD)
+            )
+            self.model.geom_solref[:, :2] = np.asarray(params['o_solref'])
+            # MuJoCo CPU accepts zero sliding friction, while Warp warns that
+            # it can create NaNs for condim >= 3 contacts.
+            self.model.geom_friction[:, 0] = np.maximum(
+                self.model.geom_friction[:, 0], 1.0e-5
+            )
+        else:
+            self.model.opt.enableflags = 1  # Override contact settings
+            self.model.opt.o_solref = np.array(params['o_solref'])
 
         # MPPI parameters
         self.temperature = params['lambda']
@@ -53,18 +85,36 @@ class BaseMPPI:
         self.sample_type = params['sample_type']
         self.n_knots = params['n_knots']
         self.random_generator = np.random.default_rng(params["seed"])
-        self.rollout_func = self.threaded_rollout
         self.cost_func = self.calculate_total_cost
 
         # Threading
-        self.thread_local = threading.local()
-        self.executor = ThreadPoolExecutor(max_workers=self.num_workers, initializer=self.thread_initializer)
+        self.thread_local = None
+        self.executor = None
+        self._native_rollout_data = None
+        if _ROLLOUT_HAS_NROLL:
+            # MuJoCo 3.1 releases the GIL in rollout but does not provide its
+            # own batch thread pool, so retain the existing Python workers.
+            self.thread_local = threading.local()
+            self.executor = ThreadPoolExecutor(
+                max_workers=self.num_workers,
+                initializer=self.thread_initializer,
+            )
+            self.rollout_func = self.threaded_rollout
+        else:
+            # New MuJoCo rollout owns a native thread pool.  Calling several
+            # instances concurrently from Python can crash, so give one
+            # batched call a reusable MjData object per native worker.
+            self._native_rollout_data = [
+                mujoco.MjData(self.model) for _ in range(self.num_workers)
+            ]
+            self.rollout_func = self.native_threaded_rollout
 
         # Initialize rollouts
         self.state_rollouts = np.zeros(
             (self.n_samples, self.horizon, mujoco.mj_stateSize(self.model, mujoco.mjtState.mjSTATE_FULLPHYSICS.value))
         )
         self.selected_trajectory = None
+        self._planner_initialized = False
 
         # Keep controls and costs in actuator order (FR, FL, RR, RL).  MuJoCo
         # stores qpos/qvel in body-tree order, which is different in the Go2
@@ -87,6 +137,39 @@ class BaseMPPI:
         """Reset the action planner to its initial state."""
         self.trajectory = np.zeros((self.horizon, self.act_dim))
         self.trajectory += self.sampling_init
+        self.selected_trajectory = None
+        self._planner_initialized = False
+
+    def prepare_planner_update(self, advance_steps=1):
+        """Advance the warm-start trajectory to the current control tick.
+
+        ``advance_steps`` is the number of command-loop ticks elapsed
+        since the state used by the previous planner update.  The first
+        planner call has no previous trajectory and therefore does not shift.
+        """
+        if isinstance(advance_steps, bool) or not isinstance(
+            advance_steps, (int, np.integer)
+        ):
+            raise TypeError("advance_steps must be a non-negative integer")
+        if advance_steps < 0:
+            raise ValueError("advance_steps must be a non-negative integer")
+        if not self._planner_initialized or advance_steps == 0:
+            return 0
+
+        steps = min(int(advance_steps), self.horizon)
+        terminal_action = self.trajectory[-1].copy()
+        if steps == self.horizon:
+            self.trajectory[:] = terminal_action
+        else:
+            self.trajectory[:-steps] = self.trajectory[steps:]
+            self.trajectory[-steps:] = terminal_action
+        return int(advance_steps)
+
+    def complete_planner_update(self, updated_actions):
+        """Store a complete, unshifted plan for execution and warm starting."""
+        self.selected_trajectory = updated_actions.copy()
+        self.trajectory = updated_actions.copy()
+        self._planner_initialized = True
 
     def state_in_actuator_order(self, state):
         """Return qpos/qvel joints arranged in actuator (controller) order."""
@@ -143,7 +226,29 @@ class BaseMPPI:
 
     def shutdown(self):
         """Shutdown the thread pool executor."""
-        self.executor.shutdown(wait=True)
+        if getattr(self, "executor", None) is not None:
+            self.executor.shutdown(wait=True)
+            self.executor = None
+        if (
+            getattr(self, "_native_rollout_data", None) is not None
+            and hasattr(rollout, "shutdown_persistent_pool")
+        ):
+            rollout.shutdown_persistent_pool()
+            self._native_rollout_data = None
+
+    def get_warp_backend(self, cost_mode):
+        """Lazily construct the simulation-only GPU backend."""
+        if self.backend != "warp":
+            raise RuntimeError("Warp backend requested from a CPU controller")
+        if self._warp_backend is None:
+            from whole_body_mppi.control.controllers.raw_warp_mppi import (
+                RawWarpMPPI,
+            )
+
+            self._warp_backend = RawWarpMPPI(self, cost_mode)
+        elif self._warp_backend.cost_mode != cost_mode:
+            raise RuntimeError("A controller cannot mix Warp cost modes")
+        return self._warp_backend
 
     def call_rollout(self, initial_state, ctrl, state):
         """
@@ -154,9 +259,33 @@ class BaseMPPI:
             ctrl (np.ndarray): Control actions to apply during the rollout.
             state (np.ndarray): State array to store the results of the rollout.
         """
-        rollout.rollout(self.model, self.thread_local.data, skip_checks=True,
-                        nroll=state.shape[0], nstep=state.shape[1],
-                        initial_state=initial_state, control=ctrl, state=state)
+        # MuJoCo <= 3.1 forwards ``nroll`` directly to its C++ binding when
+        # checks are skipped, so the batch size must be explicit.
+        rollout.rollout(
+            self.model,
+            self.thread_local.data,
+            skip_checks=True,
+            nroll=state.shape[0],
+            nstep=state.shape[1],
+            initial_state=initial_state,
+            control=ctrl,
+            state=state,
+        )
+
+    def native_threaded_rollout(
+        self, state, ctrl, initial_state, num_workers=32, nstep=5
+    ):
+        """Run a full batch using MuJoCo's native persistent thread pool."""
+        del num_workers, nstep
+        rollout.rollout(
+            self.model,
+            self._native_rollout_data,
+            initial_state=initial_state,
+            control=ctrl,
+            state=state,
+            nstep=state.shape[1],
+            persistent_pool=True,
+        )
 
     def threaded_rollout(self, state, ctrl, initial_state, num_workers=32, nstep=5):
         """
@@ -192,9 +321,14 @@ class BaseMPPI:
             lambda_ (float): Temperature parameter for MPPI.
             N (int): Number of samples for MPPI rollouts.
         """
+        if horizon <= 0 or N <= 0:
+            raise ValueError("horizon and sample count must be positive")
+        if self.sample_type == "cubic" and horizon < self.n_knots:
+            raise ValueError("cubic sampling requires horizon >= n_knots")
         self.horizon = horizon
         self.temperature = lambda_
         self.n_samples = N
+        self._warp_backend = None
 
         # Reset state rollouts with updated dimensions
         self.state_rollouts = np.zeros(

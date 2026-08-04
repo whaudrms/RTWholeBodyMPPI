@@ -52,13 +52,21 @@ class GaitScheduler:
         self.indices = np.arange(self.phase_length)
         self.type = name
         
+    def advance(self, steps=1):
+        """Advance the gait by one or more command-loop steps."""
+        if isinstance(steps, bool) or not isinstance(steps, (int, np.integer)):
+            raise TypeError("steps must be a non-negative integer")
+        if steps < 0:
+            raise ValueError("steps must be a non-negative integer")
+        self.phase_time += int(steps)
+        self.indices = np.roll(self.indices, -int(steps))
+
     def roll(self):
         """
         Advances the gait to the next phase.
         Increments the phase time and rotates the phase indices.
         """
-        self.phase_time += 1
-        self.indices = np.roll(self.indices, -1)
+        self.advance(1)
     
     def get_current_ref(self):
         """
@@ -112,14 +120,20 @@ class Timer:
         self.done = False
         self.waiting = False
         
-    def increment(self):
+    def increment(self, steps=1):
         """
         Advances the timer by one time step.
         Marks the timer as 'done' if the elapsed time reaches the end time.
         """
-        if self.elapsed_time < self.end_time:
-            self.elapsed_time += 1
-        else:
+        if isinstance(steps, bool) or not isinstance(steps, (int, np.integer)):
+            raise TypeError("steps must be a non-negative integer")
+        if steps < 0:
+            raise ValueError("steps must be a non-negative integer")
+
+        remaining = max(self.end_time - self.elapsed_time, 0)
+        consumed = min(int(steps), remaining)
+        self.elapsed_time += consumed
+        if steps > remaining:
             self.done = True
     
     def reset(self):

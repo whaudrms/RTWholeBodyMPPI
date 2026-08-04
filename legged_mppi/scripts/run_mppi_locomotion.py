@@ -2,6 +2,7 @@ import rospy
 import argparse
 import numpy as np
 from whole_body_mppi.control.controllers.mppi_locomotion import MPPI
+from whole_body_mppi.control.multi_rate_planner import MultiRatePlanner
 from scipy.spatial.transform import Rotation as R
 
 from unitree_legged_msgs.msg import MotorState, MotorCmd
@@ -12,10 +13,27 @@ KP_HIP_GAIN, KD_HIP_GAIN = 55, 3
 KP_THIGH_GAIN, KD_THIGH_GAIN = 55, 3
 KP_CALF_GAIN, KD_CALF_GAIN = 55, 3
     
+def advance_task(mppi, state, advance_steps):
+    """Update task phases on the planner thread only."""
+    error = np.linalg.norm(
+        np.asarray(mppi.body_ref[:3]) - np.asarray(state[:3])
+    )
+    if error < mppi.goal_thresh[mppi.goal_index]:
+        mppi.next_goal(advance_steps=advance_steps)
+
+
 class Controller:
-    def __init__(self, position_topic, velocity_topic):
+    def __init__(
+        self,
+        position_topic,
+        velocity_topic,
+        control_rate_hz=100,
+        planner_rate_hz=25,
+    ):
         self.position_topic = position_topic
         self.velocity_topic = velocity_topic
+        self.control_rate_hz = control_rate_hz
+        self.planner_rate_hz = planner_rate_hz
 
         self.joint_command_publishers = {}
         self.joint_states = {j: None for j in [
@@ -85,7 +103,7 @@ class Controller:
 
     def loop(self, task):
         rospy.init_node('controller_quadruped', anonymous=True)
-        rate = rospy.Rate(100) 
+        rate = rospy.Rate(self.control_rate_hz)
 
         self.setup_ros()
 
@@ -112,56 +130,81 @@ class Controller:
 
         state = np.zeros(37) 
         rospy.loginfo("Initial Goal {}".format( mppi.body_ref))
+        planner = MultiRatePlanner(
+            mppi,
+            control_rate_hz=self.control_rate_hz,
+            planner_rate_hz=self.planner_rate_hz,
+            transition_callback=advance_task,
+        )
+        control_tick = 0
+        rospy.loginfo(
+            "Control loop: %s Hz, MPPI planner: %s Hz",
+            self.control_rate_hz,
+            self.planner_rate_hz,
+        )
 
-        while not rospy.is_shutdown():
-            self.body_pos = [self.body_xy[0], self.body_xy[1], self.body_z[0]]
-            error = np.linalg.norm(np.array(mppi.body_ref[:3]) - np.array(self.body_pos))
-            
-            if error < mppi.goal_thresh[mppi.goal_index]:
-                mppi.next_goal()
+        try:
+            while not rospy.is_shutdown():
+                self.body_pos = [self.body_xy[0], self.body_xy[1], self.body_z[0]]
 
-            state[:3] = self.body_pos
-            state[3:7] = self.body_ori
-            state[7:10] = [self.joint_states["FR_hip"].q, self.joint_states["FR_thigh"].q, self.joint_states["FR_calf"].q]
-            state[10:13] = [self.joint_states["FL_hip"].q, self.joint_states["FL_thigh"].q, self.joint_states["FL_calf"].q]
-            state[13:16] = [self.joint_states["RR_hip"].q, self.joint_states["RR_thigh"].q, self.joint_states["RR_calf"].q]
-            state[16:19] = [self.joint_states["RL_hip"].q, self.joint_states["RL_thigh"].q, self.joint_states["RL_calf"].q]
-            state[19:22] = self.body_vel
-            state[22:25] = self.body_ang_vel
-            state[25:28] = [self.joint_states["FR_hip"].dq, self.joint_states["FR_thigh"].dq, self.joint_states["FR_calf"].dq]
-            state[28:31] = [self.joint_states["FL_hip"].dq, self.joint_states["FL_thigh"].dq, self.joint_states["FL_calf"].dq]
-            state[31:34] = [self.joint_states["RR_hip"].dq, self.joint_states["RR_thigh"].dq, self.joint_states["RR_calf"].dq]
-            state[34:37] = [self.joint_states["RL_hip"].dq, self.joint_states["RL_thigh"].dq, self.joint_states["RL_calf"].dq]
-    
-            control_effort = mppi.update(state)
+                state[:3] = self.body_pos
+                state[3:7] = self.body_ori
+                state[7:10] = [self.joint_states["FR_hip"].q, self.joint_states["FR_thigh"].q, self.joint_states["FR_calf"].q]
+                state[10:13] = [self.joint_states["FL_hip"].q, self.joint_states["FL_thigh"].q, self.joint_states["FL_calf"].q]
+                state[13:16] = [self.joint_states["RR_hip"].q, self.joint_states["RR_thigh"].q, self.joint_states["RR_calf"].q]
+                state[16:19] = [self.joint_states["RL_hip"].q, self.joint_states["RL_thigh"].q, self.joint_states["RL_calf"].q]
+                state[19:22] = self.body_vel
+                state[22:25] = self.body_ang_vel
+                state[25:28] = [self.joint_states["FR_hip"].dq, self.joint_states["FR_thigh"].dq, self.joint_states["FR_calf"].dq]
+                state[28:31] = [self.joint_states["FL_hip"].dq, self.joint_states["FL_thigh"].dq, self.joint_states["FL_calf"].dq]
+                state[31:34] = [self.joint_states["RR_hip"].dq, self.joint_states["RR_thigh"].dq, self.joint_states["RR_calf"].dq]
+                state[34:37] = [self.joint_states["RL_hip"].dq, self.joint_states["RL_thigh"].dq, self.joint_states["RL_calf"].dq]
 
-            self.controls["FR_hip"] = control_effort[0]
-            self.controls["FR_thigh"] = control_effort[1]
-            self.controls["FR_calf"] = control_effort[2]
+                planner.request(state, control_tick)
+                control_effort = planner.command(control_tick)
+                latest_plan = planner.latest_result()
+                if (
+                    latest_plan is not None
+                    and latest_plan.update_seconds > 1.0 / self.planner_rate_hz
+                ):
+                    rospy.logwarn_throttle(
+                        1.0,
+                        "MPPI update %.1f ms exceeded the %.1f ms deadline",
+                        latest_plan.update_seconds * 1000.0,
+                        1000.0 / self.planner_rate_hz,
+                    )
 
-            self.controls["FL_hip"] = control_effort[3]
-            self.controls["FL_thigh"] = control_effort[4]
-            self.controls["FL_calf"] = control_effort[5]
+                self.controls["FR_hip"] = control_effort[0]
+                self.controls["FR_thigh"] = control_effort[1]
+                self.controls["FR_calf"] = control_effort[2]
 
-            self.controls["RR_hip"] = control_effort[6]
-            self.controls["RR_thigh"] = control_effort[7]
-            self.controls["RR_calf"] = control_effort[8]
+                self.controls["FL_hip"] = control_effort[3]
+                self.controls["FL_thigh"] = control_effort[4]
+                self.controls["FL_calf"] = control_effort[5]
 
-            self.controls["RL_hip"] = control_effort[9]
-            self.controls["RL_thigh"] = control_effort[10]
-            self.controls["RL_calf"] = control_effort[11]
-            
-            for joint_name, data in self.joint_states.items():                 
-                command_msg = MotorCmd()
-                command_msg.mode = 0x0A  # Position control mode
-                command_msg.q = self.controls[joint_name]
-                command_msg.dq = 0 
-                command_msg.tau = 0 # Control_effort
-                command_msg.Kp = self.Kp_gains[joint_name]  # Position gain
-                command_msg.Kd = self.Kd_gains[joint_name]    # Damping gain
-                self.joint_command_publishers[joint_name].publish(command_msg)
+                self.controls["RR_hip"] = control_effort[6]
+                self.controls["RR_thigh"] = control_effort[7]
+                self.controls["RR_calf"] = control_effort[8]
 
-            rate.sleep()
+                self.controls["RL_hip"] = control_effort[9]
+                self.controls["RL_thigh"] = control_effort[10]
+                self.controls["RL_calf"] = control_effort[11]
+
+                for joint_name, data in self.joint_states.items():
+                    command_msg = MotorCmd()
+                    command_msg.mode = 0x0A  # Position control mode
+                    command_msg.q = self.controls[joint_name]
+                    command_msg.dq = 0
+                    command_msg.tau = 0 # Control_effort
+                    command_msg.Kp = self.Kp_gains[joint_name]  # Position gain
+                    command_msg.Kd = self.Kd_gains[joint_name]    # Damping gain
+                    self.joint_command_publishers[joint_name].publish(command_msg)
+
+                control_tick += 1
+                rate.sleep()
+        finally:
+            planner.shutdown()
+            mppi.shutdown()
 
 if __name__ == "__main__":
     VALID_TASKS = ['stairs', 'stand', 'walk_octagon', 'walk_straight', 'big_box',
@@ -171,6 +214,8 @@ if __name__ == "__main__":
     parser.add_argument('--task', type=str, required=True, choices=VALID_TASKS, help="Which task to run")
     parser.add_argument('--pose_source', type=str, required=True, choices=['mocap', 'gazebo', 'ekf'],
                         help="Choose source for pose: mocap, gazebo, or ekf")
+    parser.add_argument('--control-rate', type=int, default=100)
+    parser.add_argument('--planner-rate', type=int, default=25)
     args = parser.parse_args()
 
     # Topic mapping
@@ -187,5 +232,7 @@ if __name__ == "__main__":
         raise ValueError(f"Unknown pose source: {args.pose_source}")
 
     controller = Controller(position_topic=position_topic,
-                            velocity_topic=velocity_topic)
+                            velocity_topic=velocity_topic,
+                            control_rate_hz=args.control_rate,
+                            planner_rate_hz=args.planner_rate)
     controller.loop(args.task)
