@@ -32,6 +32,7 @@ class BaseMPPI:
 
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = float(self.params["dt"])
+        self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
         rollout_cone = self.params.get("rollout_cone")
         if rollout_cone is not None:
             cone_types = {

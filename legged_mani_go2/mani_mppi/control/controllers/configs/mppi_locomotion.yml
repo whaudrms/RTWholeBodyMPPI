@@ -1,0 +1,156 @@
+# ============================
+# MPPI Configuration File
+# ============================
+
+# MPPI Parameters
+dt: 0.01          # Time step size for simulation (in seconds).
+n_samples: 30     # Number of trajectory samples per iteration.
+lambda: 0.1       # Temperature parameter for trajectory cost weighting.
+horizon: 40       # Prediction horizon (number of time steps).
+n_workers: 15    # Tuned for persistent parallel MuJoCo rollouts on this CPU.
+rollout_chunk_size: 1  # Dynamically schedule one sampled trajectory per task.
+seed: 42          # Random seed for reproducibility.
+
+# Use the phase-aligned gait as the MPPI action prior.  The optimizer then
+# searches for stabilizing corrections instead of discovering the full gait
+# from the standing action trajectory.
+gait_startup_blend_steps: 50
+
+# Start the simulator and MPPI nominal trajectory from the same standing pose.
+keyframe: "stand"
+body_reference_keyframe: "stand"
+
+# Initial joint angle
+sampling_init:
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0   # SO-ARM Rotation
+  - -1.57 # SO-ARM Pitch
+  - 1.57  # SO-ARM Elbow
+  - 1.57  # SO-ARM Wrist_Pitch
+
+# ============================
+# Contact Dynamics
+# ============================
+o_solref:
+  - 0.02           # Time constant for contact model (stiffness control).
+  - 1.0            # Damping ratio for the contact model.
+rollout_cone: "pyramidal"
+
+# ============================
+# Spline Parameters
+# ============================
+sample_type: "cubic" # Spline interpolation type ("cubic" for cubic splines). Normal for nominal mppi.
+n_knots: 8       # Number of control points (knots) in the spline.
+
+# ============================
+# Noise Parameters
+# ============================
+# Noise standard deviations applied to control inputs for exploration.
+noise_sigma:
+  - 0.06 # Hip joint (FR)
+  - 0.1  # Thigh joint (FR)
+  - 0.1  # Calf joint (FR)
+  - 0.06 # Hip joint (FL)
+  - 0.1  # Thigh joint (FL)
+  - 0.1  # Calf joint (FL)
+  - 0.06 # Hip joint (RR)
+  - 0.1  # Thigh joint (RR)
+  - 0.1  # Calf joint (RR)
+  - 0.06 # Hip joint (RL)
+  - 0.1  # Thigh joint (RL)
+  - 0.1  # Calf joint (RL)
+  - 0.0  # SO-ARM Rotation
+  - 0.0  # SO-ARM Pitch
+  - 0.0  # SO-ARM Elbow
+  - 0.0  # SO-ARM Wrist_Pitch
+
+gait_noise_scale:
+  in_place: 1.0
+  walk: 1.0
+  walk_fast: 1.0
+  trot: 1.2
+
+# ============================
+# Cost Function Parameters
+# ============================
+# Diagonal entries of the state cost matrix Q
+# Higher values penalize deviations from reference states more heavily.
+Q_diag:
+  # Compact state error: [base xyz, rotation xyz, joint q, base velocity, joint velocity].
+  - 500.0     # base x
+  - 500.0     # base y
+  - 500.0     # base z
+  - 1000.0    # roll
+  - 1000.0    # pitch
+  - 100.0     # yaw
+  - 1200.0   # FR hip position
+  - 1200.0   # FR thigh position
+  - 1200.0   # FR calf position
+  - 1200.0   # FL hip position
+  - 1200.0   # FL thigh position
+  - 1200.0   # FL calf position
+  - 1200.0   # RR hip position
+  - 1200.0   # RR thigh position
+  - 1200.0   # RR calf position
+  - 1200.0   # RL hip position
+  - 1200.0   # RL thigh position
+  - 1200.0   # RL calf position
+  - 1200.0   # SO-ARM Rotation position
+  - 1200.0   # SO-ARM Pitch position
+  - 1200.0   # SO-ARM Elbow position
+  - 1200.0   # SO-ARM Wrist_Pitch position
+  - 0.1        # Base linear velocity x
+  - 0.1        # Base linear velocity y
+  - 0.1        # Base linear velocity z
+  - 0.1        # Base angular velocity x
+  - 0.1        # Base angular velocity y
+  - 0.1        # Base angular velocity z
+  - 0.0     # FR hip velocity
+  - 0.0     # FR thigh velocity
+  - 0.0     # FR calf velocity
+  - 0.0     # FL hip velocity
+  - 0.0     # FL thigh velocity
+  - 0.0     # FL calf velocity
+  - 0.0     # RR hip velocity
+  - 0.0     # RR thigh velocity
+  - 0.0     # RR calf velocity
+  - 0.0     # RL hip velocity
+  - 0.0     # RL thigh velocity
+  - 0.0     # RL calf velocity
+  - 0.0     # SO-ARM Rotation velocity
+  - 0.0     # SO-ARM Pitch velocity
+  - 0.0     # SO-ARM Elbow velocity
+  - 0.0     # SO-ARM Wrist_Pitch velocity
+
+# ============================
+# Control Cost Matrix R
+# ============================
+# Penalizes excessive control effort (torque commands).
+R_diag:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001

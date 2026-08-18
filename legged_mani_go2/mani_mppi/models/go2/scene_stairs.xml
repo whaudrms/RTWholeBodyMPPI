@@ -1,0 +1,48 @@
+<mujoco model="Go2 stairs scene">
+  <include file="../common.xml"/>
+
+  <size memory="1M"/>
+  <statistic center="1.7 0 0.8" extent="2.5"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <global azimuth="-90" elevation="-20" offheight="1024" offwidth="1024"/>
+  </visual>
+
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1" directional="true" castshadow="false"/>
+    <geom name="floor" type="plane" size="0 0 0.1" pos="0 0 -0.01"
+          material="blue_grid" friction="0.8 0.005 0.0001"/>
+    <geom name="step_01" pos="1.2 0 0.075" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_02" pos="1.4 0 0.225" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_03" pos="1.6 0 0.375" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_04" pos="1.8 0 0.525" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_05" pos="2.0 0 0.675" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_06" pos="2.2 0 0.825" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_07" pos="2.4 0 0.975" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_08" pos="2.6 0 1.125" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_09" pos="2.8 0 1.275" type="box" size="0.1 0.75 0.075"/>
+    <geom name="step_10" pos="3.0 0 1.425" type="box" size="0.1 0.75 0.075"/>
+    <geom name="landing_1" pos="3.2 0 1.425" type="box" size="0.1 0.75 0.075"/>
+    <geom name="landing_2" pos="3.4 0 1.425" type="box" size="0.1 0.75 0.075"/>
+  </worldbody>
+
+  <include file="go2.xml"/>
+
+  <keyframe>
+    <key name="home"
+         qpos="0 0 0.27 1 0 0 0
+               0 -1.57 1.57 1.57
+               0 0.9 -1.8  0 0.9 -1.8
+               0 0.9 -1.8  0 0.9 -1.8"
+         ctrl="0 0.9 -1.8  0 0.9 -1.8
+               0 0.9 -1.8  0 0.9 -1.8  0 -1.57 1.57 1.57"/>
+    <key name="sit"
+         qpos="0 0 0.08 1 0 0 0
+               0 -1.57 1.57 1.57
+               0.073 1.34 -2.83  0.073 1.34 -2.83
+               0.073 1.34 -2.83  0.073 1.34 -2.83"
+         ctrl="0.073 1.34 -2.83  0.073 1.34 -2.83
+               0.073 1.34 -2.83  0.073 1.34 -2.83  0 -1.57 1.57 1.57"/>
+  </keyframe>
+</mujoco>

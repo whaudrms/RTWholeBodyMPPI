@@ -35,6 +35,7 @@ class B2Z1Env:
         self.model_path = Path(model_path).resolve()
         self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
         self.model.opt.timestep = dt
+        self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
         self.data = mujoco.MjData(self.model)
         self.joint_names = LEG_JOINT_NAMES + ARM_JOINT_NAMES
         self.actuator_names = ACTUATOR_NAMES

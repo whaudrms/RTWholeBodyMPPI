@@ -1,0 +1,37 @@
+<mujoco model="Go2 push-box scene">
+  <include file="../common.xml"/>
+
+  <size memory="1M"/>
+  <statistic center="1 0 0.25" extent="2.5"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <global azimuth="-90" elevation="-20" offheight="1024" offwidth="1024"/>
+  </visual>
+
+  <!-- Keep the box before the included robot so the legacy push controller's
+       [box state, robot state] layout remains valid. -->
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true" castshadow="false"/>
+    <geom name="floor" type="plane" size="0 0 0.1" pos="0 0 -0.01"
+          material="blue_grid" friction="0.8 0.005 0.0001"/>
+    <body name="box" pos="2 0 0.1815">
+      <freejoint name="box_joint"/>
+      <inertial mass="3.70" diaginertia="0.0749 0.0749 0.0849" pos="0 0 0"/>
+      <geom name="box_geom" type="box" size="0.19 0.19 0.19"
+            rgba="0 1 0 1" density="500" friction="0 0.005 0.0001"/>
+    </body>
+  </worldbody>
+
+  <include file="go2.xml"/>
+
+  <keyframe>
+    <key name="home"
+         qpos="2 0 0.1815 1 0 0 0
+               0 0 0.27 1 0 0 0
+               0 0.9 -1.8  0 0.9 -1.8
+               0 0.9 -1.8  0 0.9 -1.8"
+         ctrl="0 0.9 -1.8  0 0.9 -1.8
+               0 0.9 -1.8  0 0.9 -1.8"/>
+  </keyframe>
+</mujoco>

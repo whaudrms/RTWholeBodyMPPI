@@ -1,0 +1,3 @@
+WARNING Thu Aug 13 20:05:42 2026: Attach conflict when attaching 'open_manipulator_x' to 'go2', policy is 'warning'
+impratio: parent has 100, child has 10, keeping parent value
+

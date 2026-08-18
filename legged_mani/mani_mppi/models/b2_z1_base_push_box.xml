@@ -3,7 +3,7 @@
        scene_push_box.xml includes this file so both models share identical
        dynamics, joint ordering and keyframes. -->
   <compiler angle="radian" meshdir="assets" autolimits="true" inertiafromgeom="false"/>
-  <option timestep="0.01" integrator="implicitfast" cone="elliptic" impratio="100"/>
+  <option timestep="0.01" integrator="Euler" cone="elliptic" impratio="100"/>
 
   <!--
     MPPI action order:
@@ -12,7 +12,7 @@
   -->
   <default>
     <joint damping="1" armature="0.1"/>
-    <geom friction="0.8 0.02 0.01" margin="0.001" condim="4"/>
+    <geom friction="0.6 0.005 0.0001" margin="0.001" condim="1"/>
     <default class="visual">
       <geom type="mesh" contype="0" conaffinity="0" group="2" density="0"/>
     </default>
@@ -268,18 +268,18 @@
       </body>
     </body>
 
-    <geom name="floor" type="plane" size="0 0 0.05" pos="0 0 0"
-          material="push_box_ground" friction="0.8 0.02 0.01" condim="6"/>
+    <geom name="floor" type="plane" size="0 0 0.1" pos="0 0 -0.01"
+          material="push_box_ground" friction="0.8 0.005 0.0001"
+          margin="0" condim="3"/>
 
-    <!-- Keep the initial rear-face contact point inside the crouched Z1
-         workspace. The z position is 0.19 because the floor is at z=0. -->
+    <!-- Keep the initial box inside the B2-Z1 manipulation workspace. -->
     <body name="box" pos="1 0 0.19">
       <freejoint name="box_joint"/>
       <inertial pos="0 0 0" mass="3.70"
                 diaginertia="0.0749 0.0749 0.0849"/>
       <geom name="box_geom" type="box" size="0.19 0.19 0.19"
-            material="push_box_material"
-            priority="1" friction="0.3 0.02 0.01" condim="6"/>
+            material="push_box_material" density="500"
+            friction="0 0.005 0.0001" margin="0" condim="3"/>
       <!-- Nominal contact point on the face approached from -x. -->
       <site name="box_push_face" pos="-0.19 0 0" size="0.015"
             rgba="1 0 0 0.65" group="4"/>

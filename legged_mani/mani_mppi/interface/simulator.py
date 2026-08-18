@@ -17,6 +17,7 @@ def synchronize_contact_options(target_model, source_model):
     XML defaults (elliptic contacts without the override).
     """
     target_model.opt.cone = source_model.opt.cone
+    target_model.opt.integrator = source_model.opt.integrator
 
     override_bit = int(mujoco.mjtEnableBit.mjENBL_OVERRIDE)
     target_model.opt.enableflags = (
@@ -75,6 +76,7 @@ class Simulator:
         # model
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = dt
+        self.model.opt.integrator = mujoco.mjtIntegrator.mjINT_EULER
         if agent is not None and hasattr(agent, "model"):
             # MPPI and the closed-loop simulator use separate model instances.
             # Keep their contact dynamics identical so rollout costs describe

@@ -1,0 +1,237 @@
+# ============================
+# MPPI Configuration File
+# ============================
+
+# MPPI Parameters
+# These control the behavior of the Model Predictive Path Integral optimization.
+dt: 0.01          # Time step size for simulation (in seconds).
+n_samples: 30     # Number of trajectory samples per iteration.
+lambda: 0.1       # Temperature parameter for trajectory cost weighting.
+horizon: 40       # Prediction horizon (number of time steps).
+n_workers: 15    # Tuned for persistent parallel MuJoCo rollouts on this CPU.
+rollout_chunk_size: 1  # Dynamically schedule one sampled trajectory per task.
+seed: 42          # Random seed for reproducibility.
+
+# Use the phase-aligned leg gait and current arm IK posture as the MPPI action
+# prior. The optimizer searches only for whole-body stabilizing corrections.
+nominal_from_gait: true
+gait_startup_blend_steps: 50
+
+# Start the simulator and MPPI nominal trajectory from the same standing pose.
+keyframe: "stand"
+body_reference_keyframe: "stand"
+# Height-conditioned gait selection for reachability-aware locomani.
+default_gait: "stance_hold"
+approach_gait: "walk_fast"
+tracking_gait: "stance_hold"
+
+adaptive_gait_enabled: true
+stand_base_height: 0.27
+min_base_height: 0.18
+base_height_rate: 0.10
+base_height_tolerance: 0.015
+base_xy_tolerance: 0.05
+# Larger exit tolerances prevent walk/hold chatter after the plan settles.
+base_height_reengage_tolerance: 0.025
+base_xy_reengage_tolerance: 0.08
+approach_speed: 0.2
+# Deep-crouch XY commands are slowed to this fraction of approach_speed.
+crouch_speed_scale_min: 0.40
+# A fallback at the bounded CEM XY radius is treated as an intermediate
+# waypoint. This limits same-goal chaining when a target is truly unreachable.
+max_fallback_replans: 8
+
+reachability_residual_threshold: 0.03
+reachability_max_xy_shift: 0.40
+reachability_ik_iterations: 40
+
+# Continuous [delta_x, delta_y, base_z] Cross-Entropy Method planner.
+# This upper layer performs only one arm IK per candidate and one vectorized
+# arm/torso collision pass per iteration. A private MuJoCo model/data stack
+# runs in a background worker and never launches or blocks on an MPPI rollout.
+cem_num_samples: 48
+cem_num_iterations: 3
+cem_elite_fraction: 0.20
+cem_smoothing: 0.15
+cem_seed: 1042
+cem_initial_xy_std: 0.20
+cem_initial_height_std: 0.08
+cem_min_xy_std: 0.01
+cem_min_height_std: 0.005
+
+# Dimensionless CEM pose-objective weights.
+cem_infeasible_penalty: 1000.0
+cem_reachability_weight: 100.0
+cem_residual_weight: 1.0
+cem_xy_weight: 6.0
+cem_height_weight: 3.0
+cem_joint_limit_weight: 1.0
+cem_joint_limit_margin: 0.10
+
+# Arm IK parameters used to generate the nominal arm-joint reference.
+arm_ik_damping: 0.05
+arm_ik_step_size: 0.7
+arm_ik_max_iterations: 5
+arm_ik_tolerance: 0.0001
+arm_ik_smoothing: 0.3
+arm_ik_max_step: 0.04
+
+# Initial joint angle
+sampling_init:
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0
+  - 0.9
+  - -1.8
+  - 0.0   # SO-ARM Rotation
+  - -1.57 # SO-ARM Pitch
+  - 1.57  # SO-ARM Elbow
+  - 1.57  # SO-ARM Wrist_Pitch
+
+# ============================
+# Contact Dynamics
+# ============================
+o_solref:
+  - 0.02           # Time constant for contact model (stiffness control).
+  - 1.0            # Damping ratio for the contact model.
+rollout_cone: "pyramidal"
+
+# ============================
+# Spline Parameters
+# ============================
+sample_type: "cubic" # Spline interpolation type ("cubic" for cubic splines). Normal for nominal mppi.
+n_knots: 4           # Number of control points (knots) in the spline.
+
+# ============================
+# Noise Parameters
+# ============================
+# Noise standard deviations applied to control inputs for exploration.
+noise_sigma:
+  - 0.03 # Hip joint (FR)
+  - 0.1  # Thigh joint (FR)
+  - 0.1  # Calf joint (FR)
+  - 0.03 # Hip joint (FL)
+  - 0.1  # Thigh joint (FL)
+  - 0.1  # Calf joint (FL)
+  - 0.03 # Hip joint (RR)
+  - 0.1  # Thigh joint (RR)
+  - 0.1  # Calf joint (RR)
+  - 0.03 # Hip joint (RL)
+  - 0.1  # Thigh joint (RL)
+  - 0.1  # Calf joint (RL)
+  # Nonzero arm exploration is required for MPPI to discover EE motion.
+  - 0.06 # SO-ARM Rotation
+  - 0.06 # SO-ARM Pitch
+  - 0.06 # SO-ARM Elbow
+  - 0.06 # SO-ARM Wrist_Pitch
+
+gait_noise_scale:
+  stance_hold: 0.6
+  in_place: 1.0
+  walk: 1.0
+  walk_fast: 1.0
+  trot: 1.2
+
+# ============================
+# Cost Function Parameters
+# ============================
+# Diagonal entries of the state cost matrix Q.
+Q_diag:
+  # Compact state error: [base xyz, RPY, joint q, base velocity, joint velocity].
+  - 3000.0    # base x
+  - 3000.0    # base y
+  - 1500.0    # base z
+  - 5000.0    # roll
+  - 3000.0    # pitch
+  - 0.0       # yaw
+  - 500.0   # FR hip position
+  - 500.0   # FR thigh position
+  - 500.0   # FR calf position
+  - 500.0   # FL hip position
+  - 500.0   # FL thigh position
+  - 500.0   # FL calf position
+  - 500.0   # RR hip position
+  - 500.0   # RR thigh position
+  - 500.0   # RR calf position
+  - 500.0   # RL hip position
+  - 500.0   # RL thigh position
+  - 500.0   # RL calf position
+  - 500.0   # SO-ARM Rotation position
+  - 500.0   # SO-ARM Pitch position
+  - 500.0   # SO-ARM Elbow position
+  - 500.0   # SO-ARM Wrist_Pitch position
+  - 20.0       # Base linear velocity x
+  - 20.0       # Base linear velocity y
+  - 0.1        # Base linear velocity z
+  - 0.1        # Base angular velocity x
+  - 0.1        # Base angular velocity y
+  - 0.1        # Base angular velocity z
+  - 0.0     # FR hip velocity
+  - 0.0     # FR thigh velocity
+  - 0.0     # FR calf velocity
+  - 0.0     # FL hip velocity
+  - 0.0     # FL thigh velocity
+  - 0.0     # FL calf velocity
+  - 0.0     # RR hip velocity
+  - 0.0     # RR thigh velocity
+  - 0.0     # RR calf velocity
+  - 0.0     # RL hip velocity
+  - 0.0     # RL thigh velocity
+  - 0.0     # RL calf velocity
+  - 0.0     # SO-ARM Rotation velocity
+  - 0.0     # SO-ARM Pitch velocity
+  - 0.0     # SO-ARM Elbow velocity
+  - 0.0     # SO-ARM Wrist_Pitch velocity
+
+# ============================
+# Control Cost Matrix R
+# ============================
+# Penalizes excessive control effort (torque commands).
+R_diag:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+
+
+# ============================
+# Arm-to-torso Hard Collision Constraint
+# ============================
+collision_enabled: true
+collision_body_geom: "base_collision"
+disable_arm_torso_rollout_contact: true
+rollout_arm_root_body: "arm_mount"
+collision_capsule_radii: [0.035, 0.035, 0.030, 0.025]
+collision_shoulder_exclusion: 1.0                 # shoulder exception
+collision_hard_distance: 0.015
+
+# ============================
+# EE pos Cost Parameters
+# ============================
+ee_position_weight: 5000.0
+ee_orientation_weight: 0.0 # no orientation tracking
+
+
+# ============================
+# EE Terminal Cost Parameters
+# ============================
+ee_terminal_scale: 10.0

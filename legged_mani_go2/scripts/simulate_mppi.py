@@ -1,0 +1,133 @@
+import numpy as np
+import os
+import sys
+from pathlib import Path
+
+package_root = str(Path(__file__).resolve().parents[1])
+if package_root not in sys.path:
+    sys.path.insert(0, package_root)
+
+from mani_mppi.interface.simulator import Simulator
+from mani_mppi.utils.tasks import get_task
+
+import argparse
+
+
+def main(
+    task,
+    viewer_render_rate=30.0,
+    rollout_mode="original_spline",
+    plot=False,
+    headless=False,
+):
+    T = 2000  # 20 seconds
+    viewer_enabled = not headless
+
+    SIMULATION_STEP = 0.01
+    CTRL_UPDATE_RATE = 100
+    CTRL_HORIZON = 40
+    CTRL_LAMBDA = 0.1
+    CTRL_N_SAMPLES = 30
+
+    # Soft contact model paramters
+    TIMECONST = 0.02
+    DAMPINGRATIO = 1.0
+    
+
+    # Get task data
+    task_data = get_task(task)
+    sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
+
+    # Initialize agent and simulator
+    if task == "locomani":
+        from mani_mppi.control.controllers.mppi_locomani import MPPI
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
+    elif task == "ee_tracking":
+        from mani_mppi.control.controllers.mppi_ee_tracking import MPPI
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
+    elif task == "push_box":
+        from mani_mppi.control.controllers.mppi_push_box import MPPI
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
+    else:
+        from mani_mppi.control.controllers.mppi_locomotion import MPPI
+        agent = MPPI(task=task, rollout_mode=rollout_mode)
+    # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
+    if viewer_enabled:
+        if viewer_render_rate <= 0:
+            raise ValueError("viewer_render_rate must be positive")
+        render_every = max(
+            1, round(1.0 / (SIMULATION_STEP * viewer_render_rate))
+        )
+    else:
+        render_every = 1
+    simulator = Simulator(agent=agent, viewer=viewer_enabled, T=T, dt=SIMULATION_STEP, timeconst=TIMECONST,
+                          dampingratio=DAMPINGRATIO, model_path=sim_path, ctrl_rate=CTRL_UPDATE_RATE,
+                          render_every=render_every, plot_enabled=plot)
+    
+    # Run simulation
+    simulator.run()
+    if plot:
+        simulator.plot_trajectory()
+
+if __name__ == "__main__":
+    # Define valid tasks
+    VALID_TASKS = [
+        'stand',
+        'walk_straight',
+        'big_box',
+        'locomani',
+        'ee_tracking',
+        'push_box',
+    ]
+
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Run simulation with a specified task.")
+    parser.add_argument('--task', type=str, required=True, choices=VALID_TASKS, 
+                        help=f"Name of the task. Must be one of {VALID_TASKS}.")
+    parser.add_argument(
+        '--render-rate', type=float, default=60.0,
+        help='Viewer frames per simulated second (default: 30).',
+    )
+    parser.add_argument(
+        '--rollout-mode',
+        choices=(
+            'noise_spline',
+            'original',
+            'original_spline',
+            'safe_spline',
+        ),
+        default='original_spline',
+        help=(
+            'Select MPPI rollout sampling (default: original_spline): '
+            'noise_spline interpolates only noise around the gait residual; '
+            'original uses previous-solution absolute cubic sampling; '
+            'original_spline splines the complete gait warm start; '
+            'safe_spline preserves the gait and splines residuals.'
+        ),
+    )
+    parser.add_argument(
+        '--plot',
+        action='store_true',
+        help=(
+            'Record task diagnostics and save the dashboard/cost log after '
+            'simulation. Disabled by default to avoid runtime logging overhead.'
+        ),
+    )
+    parser.add_argument(
+        '--headless',
+        action='store_true',
+        help=(
+            'Run without creating or rendering the MuJoCo viewer. Can be '
+            'combined with --plot to save diagnostics without a GUI.'
+        ),
+    )
+    args = parser.parse_args()
+
+    # Run main with the provided task
+    main(
+        args.task,
+        viewer_render_rate=args.render_rate,
+        rollout_mode=args.rollout_mode,
+        plot=args.plot,
+        headless=args.headless,
+    )

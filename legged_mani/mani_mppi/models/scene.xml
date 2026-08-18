@@ -22,6 +22,6 @@
   <worldbody>
     <light pos="0 0 2" dir="0 0 -1" directional="true"/>
     <geom name="floor" size="0 0 0.05" pos="0 0 0" type="plane"
-          material="groundplane" friction="0.8 0.02 0.01" condim="6"/>
+          material="groundplane" friction="0.8 0.005 0.0001" condim="3"/>
   </worldbody>
 </mujoco>
