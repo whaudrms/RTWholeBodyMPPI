@@ -10,7 +10,11 @@ import numpy as np
 
 @dataclass(frozen=True)
 class CollisionResult:
-    """Per-state arm clearance and hard-validity results."""
+    """Per-state clearance estimates and hard validity.
+
+    Broad-phase accepted pairs report a conservative lower bound, not the
+    closest-point distance. Use segment_valid for the hard constraint.
+    """
 
     clearance: np.ndarray
     segment_valid: np.ndarray
@@ -27,6 +31,7 @@ class ArmTorsoCollision:
 
     def __init__(self, model: mujoco.MjModel, config: dict) -> None:
         self.enabled = bool(config.get("collision_enabled", True))
+        self.broadphase_enabled = bool(config.get("collision_broadphase", False))
         self.fast_samples = int(config.get("collision_fast_samples", 9))
         if self.fast_samples < 2:
             raise ValueError("collision_fast_samples must be at least 2")
@@ -287,41 +292,64 @@ class ArmTorsoCollision:
             self.capsule_radii[None, :], starts_geom.shape[:2]
         )
 
-        segment_vector = ends_geom - starts_geom
+        # The segment lies inside its AABB. Distance from that AABB to the
+        # torso is a conservative lower bound on capsule clearance.
+        if self.broadphase_enabled:
+            separation = np.maximum(
+                np.maximum(np.minimum(starts_geom, ends_geom) - self.body_half_size,
+                           -self.body_half_size - np.maximum(starts_geom, ends_geom)), 0.0)
+            lower_bound = np.linalg.norm(separation, axis=-1) - radii
+            broad_valid = lower_bound >= self.hard_distance + 1e-12
+        else:
+            lower_bound = np.zeros(starts_geom.shape[:2])
+            broad_valid = np.zeros(starts_geom.shape[:2], dtype=bool)
+        pending = ~broad_valid
+        clearance = lower_bound.copy()
+        segment_valid = broad_valid.copy()
+        exact_evaluations = 0
+        if not np.any(pending):
+            return CollisionResult(clearance, segment_valid, exact_evaluations)
+        near_starts = starts_geom[pending]
+        near_ends = ends_geom[pending]
+        near_radii = radii[pending]
+        segment_vector = near_ends - near_starts
         samples_geom = (
-            starts_geom[:, :, None, :]
-            + self.fast_alpha[None, None, :, None]
-            * segment_vector[:, :, None, :]
+            near_starts[:, None, :]
+            + self.fast_alpha[None, :, None]
+            * segment_vector[:, None, :]
         )
         outside = np.maximum(
             np.abs(samples_geom) - self.body_half_size, 0.0
         )
         sampled_distance = np.min(
-            np.linalg.norm(outside, axis=-1), axis=2
+            np.linalg.norm(outside, axis=-1), axis=1
         )
-        half_sample_spacing = np.linalg.norm(segment_vector, axis=2) / (
+        half_sample_spacing = np.linalg.norm(segment_vector, axis=1) / (
             2.0 * (self.fast_samples - 1)
         )
-        sampled_clearance = sampled_distance - radii
+        sampled_clearance = sampled_distance - near_radii
         lower_clearance = (
-            np.maximum(sampled_distance - half_sample_spacing, 0.0) - radii
+            np.maximum(sampled_distance - half_sample_spacing, 0.0) - near_radii
         )
 
         definitely_invalid = sampled_clearance < self.hard_distance
         definitely_valid = lower_clearance >= self.hard_distance
         refine = ~(definitely_invalid | definitely_valid)
 
-        clearance = 0.5 * (lower_clearance + sampled_clearance)
-        segment_valid = ~definitely_invalid
+        near_clearance = 0.5 * (lower_clearance + sampled_clearance)
+        near_valid = ~definitely_invalid
         exact_evaluations = int(np.count_nonzero(refine))
         if exact_evaluations:
             exact_clearance = self.segment_aabb_distance(
-                starts_geom[refine],
-                ends_geom[refine],
+                near_starts[refine],
+                near_ends[refine],
                 self.body_half_size,
-            ) - radii[refine]
-            clearance[refine] = exact_clearance
-            segment_valid[refine] = exact_clearance >= self.hard_distance
+            ) - near_radii[refine]
+            near_clearance[refine] = exact_clearance
+            near_valid[refine] = exact_clearance >= self.hard_distance
+
+        clearance[pending] = near_clearance
+        segment_valid[pending] = near_valid
 
         return CollisionResult(
             clearance=clearance,

@@ -1,0 +1,352 @@
+{
+  "measured_on": "2026-10-06",
+  "cpu": "Intel Core i7-12700H",
+  "mujoco": "3.1.6",
+  "notes": [
+    "All trials are synchronous headless simulation. Latency is agent.update wall time, excluding viewer, physics stepping, and goal transitions.",
+    "Steady-state statistics omit the first 10 updates; each trial is a single run, not a repeated statistical study.",
+    "The original and optimized default comparisons use 500 updates, 30 candidates, 40 horizon steps, and 3 iterations. Async CEM completion can change closed-loop trajectories between runs.",
+    "Experimental rt20 uses a 20 ms soft budget, 30 candidates, 10 workers, and mean verification. It completed only one iteration per update in these trials.",
+    "The 1608-update rt20 run stopped with no valid execution candidate. The P-core-only 2000-update run did not complete all goals. Neither meets the requested latency plus task-quality target.",
+    "Smaller sample counts and reduced-noise experiments degraded task progress or posture and were not adopted.",
+    "CPU affinity was unrestricted (0-19) except for the explicitly named P-core trial (0-11). System power settings were not changed."
+  ],
+  "regression_tests": {
+    "passed": 40,
+    "suite": "python -m unittest discover -s legged_mani/tests -p test_*.py -v"
+  },
+  "trials": {
+    "original_500": {
+      "settings": {
+        "rollout_mode": "hermite",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "performance_profile": null,
+        "n_samples": 30,
+        "workers": 15,
+        "chunk_size": 1,
+        "horizon": 40,
+        "dt_s": 0.01,
+        "max_iterations": 3,
+        "planning_budget_ms": 0.0,
+        "validate_mean": true,
+        "collision_broadphase": false,
+        "seed": 42,
+        "mujoco_version": "3.1.6"
+      },
+      "initialization_ms": 3979.594168000176,
+      "deadline_ms": 20.0,
+      "warmup_updates": 10,
+      "all_updates": {
+        "count": 500,
+        "median_ms": 112.8568985000129,
+        "p95_ms": 135.1331613000411,
+        "p99_ms": 146.162421450108,
+        "max_ms": 149.57346300002428,
+        "deadline_misses": 500,
+        "deadline_miss_fraction": 1.0,
+        "phase_mean_ms": {
+          "reference": 1.5105587759962873,
+          "sampling": 3.0737966980009332,
+          "rollout": 67.29821867799774,
+          "cost": 19.93687640199505,
+          "selection": 22.100725616011914,
+          "total": 114.21576420400426
+        },
+        "iteration_counts": {
+          "3": 500
+        }
+      },
+      "steady_state": {
+        "count": 490,
+        "median_ms": 112.67753649997303,
+        "p95_ms": 135.40593430004716,
+        "p99_ms": 146.22951595009908,
+        "max_ms": 149.57346300002428,
+        "deadline_misses": 490,
+        "deadline_miss_fraction": 1.0,
+        "phase_mean_ms": {
+          "reference": 1.5065239959150338,
+          "sampling": 3.0678013632663053,
+          "rollout": 67.24650238979291,
+          "cost": 19.926382726526402,
+          "selection": 22.076729914298383,
+          "total": 114.11896057347431
+        },
+        "iteration_counts": {
+          "3": 490
+        }
+      },
+      "scenario": {
+        "requested_steps": 500,
+        "completed_steps": 500,
+        "goal_index": 4,
+        "goals": 6,
+        "task_success": false,
+        "failure": null,
+        "min_base_height_m": 0.40504128939537437,
+        "max_base_tilt_deg": 7.124544941692346,
+        "final_ee_position_error_m": 0.05117833562812925
+      }
+    },
+    "optimized_default_500": {
+      "settings": {
+        "rollout_mode": "hermite",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19
+        ],
+        "performance_profile": null,
+        "n_samples": 30,
+        "workers": 15,
+        "chunk_size": 1,
+        "horizon": 40,
+        "dt_s": 0.01,
+        "max_iterations": 3,
+        "planning_budget_ms": 0.0,
+        "validate_mean": true,
+        "collision_broadphase": true,
+        "seed": 42,
+        "mujoco_version": "3.1.6"
+      },
+      "initialization_ms": 2341.2094160000834,
+      "deadline_ms": 20.0,
+      "warmup_updates": 10,
+      "all_updates": {
+        "count": 500,
+        "median_ms": 101.42341450023196,
+        "p95_ms": 117.495811799904,
+        "p99_ms": 127.40621144002262,
+        "max_ms": 131.65384800004176,
+        "deadline_misses": 500,
+        "deadline_miss_fraction": 1.0,
+        "phase_mean_ms": {
+          "reference": 1.433705271997951,
+          "sampling": 2.9714628640163028,
+          "rollout": 66.74619501599908,
+          "cost": 12.60422413002334,
+          "selection": 17.81788229798667,
+          "total": 101.86655331600195
+        },
+        "iteration_counts": {
+          "3": 500
+        }
+      },
+      "steady_state": {
+        "count": 490,
+        "median_ms": 101.63826349980809,
+        "p95_ms": 117.53052979995573,
+        "p99_ms": 127.45322583997904,
+        "max_ms": 131.65384800004176,
+        "deadline_misses": 490,
+        "deadline_miss_fraction": 1.0,
+        "phase_mean_ms": {
+          "reference": 1.4392269081610016,
+          "sampling": 2.9812784265482613,
+          "rollout": 66.98974672857108,
+          "cost": 12.644622269412213,
+          "selection": 17.884965577537532,
+          "total": 102.23427016530879
+        },
+        "iteration_counts": {
+          "3": 490
+        }
+      },
+      "scenario": {
+        "requested_steps": 500,
+        "completed_steps": 500,
+        "goal_index": 4,
+        "goals": 6,
+        "task_success": false,
+        "failure": null,
+        "min_base_height_m": 0.39816476674733536,
+        "max_base_tilt_deg": 6.606490221767541,
+        "final_ee_position_error_m": 0.037376498204892694
+      }
+    },
+    "experimental_rt20_1608": {
+      "settings": {
+        "rollout_mode": "hermite",
+        "performance_profile": "rt20",
+        "n_samples": 30,
+        "workers": 10,
+        "chunk_size": 1,
+        "horizon": 40,
+        "dt_s": 0.01,
+        "max_iterations": 3,
+        "planning_budget_ms": 20.0,
+        "validate_mean": true,
+        "collision_broadphase": true,
+        "seed": 42,
+        "mujoco_version": "3.1.6"
+      },
+      "initialization_ms": 2344.186024999999,
+      "deadline_ms": 20.0,
+      "warmup_updates": 10,
+      "all_updates": {
+        "count": 1608,
+        "median_ms": 36.30945949987563,
+        "p95_ms": 42.283902100007246,
+        "p99_ms": 47.806862009899774,
+        "max_ms": 63.75287500009108,
+        "deadline_misses": 1608,
+        "deadline_miss_fraction": 1.0,
+        "phase_mean_ms": {
+          "reference": 1.4796013874370237,
+          "sampling": 0.9724892276093177,
+          "rollout": 23.467130516170286,
+          "cost": 4.24969714738913,
+          "selection": 6.226969873135835,
+          "total": 36.67761916044843
+        },
+        "iteration_counts": {
+          "1": 1608
+        }
+      },
+      "steady_state": {
+        "count": 1598,
+        "median_ms": 36.300088999951186,
+        "p95_ms": 42.30476010001211,
+        "p99_ms": 47.827463289900145,
+        "max_ms": 63.75287500009108,
+        "deadline_misses": 1598,
+        "deadline_miss_fraction": 1.0,
+        "phase_mean_ms": {
+          "reference": 1.4797115344172722,
+          "sampling": 0.9721532653289952,
+          "rollout": 23.463782232166174,
+          "cost": 4.249854548186207,
+          "selection": 6.230200709012835,
+          "total": 36.677365071965866
+        },
+        "iteration_counts": {
+          "1": 1598
+        }
+      },
+      "scenario": {
+        "requested_steps": 2000,
+        "completed_steps": 1608,
+        "goal_index": 2,
+        "goals": 6,
+        "task_success": false,
+        "failure": {
+          "step": 1608,
+          "type": "RuntimeError",
+          "message": "No valid Hermite execution plan at the current state"
+        },
+        "min_base_height_m": 0.2786621647664692,
+        "max_base_tilt_deg": 15.961757601874622,
+        "final_ee_position_error_m": 0.10821693985670151
+      }
+    },
+    "experimental_rt20_pcores_2000": {
+      "settings": {
+        "rollout_mode": "hermite",
+        "performance_profile": "rt20",
+        "n_samples": 30,
+        "workers": 10,
+        "chunk_size": 1,
+        "horizon": 40,
+        "dt_s": 0.01,
+        "max_iterations": 3,
+        "planning_budget_ms": 20.0,
+        "validate_mean": true,
+        "collision_broadphase": true,
+        "seed": 42,
+        "mujoco_version": "3.1.6"
+      },
+      "initialization_ms": 2365.9401239999625,
+      "deadline_ms": 20.0,
+      "warmup_updates": 10,
+      "all_updates": {
+        "count": 2000,
+        "median_ms": 36.078639500033205,
+        "p95_ms": 39.86659875013174,
+        "p99_ms": 41.33848659000705,
+        "max_ms": 60.75691299997743,
+        "deadline_misses": 1872,
+        "deadline_miss_fraction": 0.936,
+        "phase_mean_ms": {
+          "reference": 1.2082713839992039,
+          "sampling": 0.8085659084979397,
+          "rollout": 22.044763961999937,
+          "cost": 3.415229776504134,
+          "selection": 5.103158804498889,
+          "total": 32.80753107200007
+        },
+        "iteration_counts": {
+          "1": 2000
+        }
+      },
+      "steady_state": {
+        "count": 1990,
+        "median_ms": 36.08601499990982,
+        "p95_ms": 39.86877625006855,
+        "p99_ms": 41.33949249001034,
+        "max_ms": 60.75691299997743,
+        "deadline_misses": 1862,
+        "deadline_miss_fraction": 0.935678391959799,
+        "phase_mean_ms": {
+          "reference": 1.2101147502505396,
+          "sampling": 0.809646193465025,
+          "rollout": 22.079538921608062,
+          "cost": 3.4201125849287206,
+          "selection": 5.112112433667177,
+          "total": 32.859376067336605
+        },
+        "iteration_counts": {
+          "1": 1990
+        }
+      },
+      "scenario": {
+        "requested_steps": 2000,
+        "completed_steps": 2000,
+        "goal_index": 2,
+        "goals": 6,
+        "task_success": false,
+        "failure": null,
+        "min_base_height_m": 0.22654422965787518,
+        "max_base_tilt_deg": 18.834820330201165,
+        "final_ee_position_error_m": 0.08841804448465392
+      }
+    }
+  }
+}

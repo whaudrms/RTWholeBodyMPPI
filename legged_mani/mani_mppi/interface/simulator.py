@@ -86,6 +86,8 @@ class Simulator:
             # Preserve the standalone Simulator API when no controller model
             # is available as the source of truth.
             self.model.opt.o_solref = np.array([timeconst, dampingratio])
+        if agent is not None and hasattr(agent, "configure_execution_model"):
+            agent.configure_execution_model(self.model)
         # data
         self.data = mujoco.MjData(self.model)
         self.T = T

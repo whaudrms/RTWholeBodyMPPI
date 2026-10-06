@@ -235,3 +235,17 @@ ee_orientation_weight: 0.0 # no orientation tracking
 # EE Terminal Cost Parameters
 # ============================
 ee_terminal_scale: 10.0
+
+# Inner MPPI refinement; stddev shrinks per iteration and toward near-term knots.
+# Set anneal_iterations: 1 and horizon_noise_factor: 1.0 for the old single pass.
+anneal_iterations: 3
+anneal_factor: 0.5
+horizon_noise_factor: 0.9
+# Velocity-node noise = position noise [rad] * this factor [1/s].
+# Used only with --rollout-mode hermite.
+hermite_velocity_noise_scale: 4.0
+
+# rt20 overrides these at construction; zero disables the soft time budget.
+planning_budget_ms: 0.0
+validate_mean: true
+collision_broadphase: true

@@ -19,6 +19,9 @@ def main(
     rollout_mode="original_spline",
     plot=False,
     headless=False,
+    anneal_iterations=None,
+    horizon_noise_factor=None,
+    performance_profile=None,
 ):
     T = 2000  # 20 seconds
     viewer_enabled = not headless
@@ -35,13 +38,18 @@ def main(
     
 
     # Get task data
+    if task != "locomani" and (rollout_mode == "hermite" or anneal_iterations is not None or horizon_noise_factor is not None or performance_profile is not None):
+        raise ValueError("Hermite/annealing CLI options currently support --task locomani only")
     task_data = get_task(task)
     sim_path = os.path.join(os.path.dirname(__file__), "../mani_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
     if task == "locomani":
         from mani_mppi.control.controllers.mppi_locomani import MPPI
-        agent = MPPI(task=task, rollout_mode=rollout_mode)
+        agent = MPPI(task=task, rollout_mode=rollout_mode,
+                     anneal_iterations=anneal_iterations,
+                     horizon_noise_factor=horizon_noise_factor,
+                     performance_profile=performance_profile)
     elif task == "ee_tracking":
         from mani_mppi.control.controllers.mppi_ee_tracking import MPPI
         agent = MPPI(task=task, rollout_mode=rollout_mode)
@@ -95,6 +103,7 @@ if __name__ == "__main__":
             'original',
             'original_spline',
             'safe_spline',
+            'hermite',
         ),
         default='original_spline',
         help=(
@@ -102,9 +111,16 @@ if __name__ == "__main__":
             'noise_spline interpolates only noise around the gait residual; '
             'original uses previous-solution absolute cubic sampling; '
             'original_spline splines the complete gait warm start; '
-            'safe_spline preserves the gait and splines residuals.'
+            'safe_spline preserves the gait and splines residuals; '
+            'hermite samples position and velocity targets (locomani only).'
         ),
     )
+    parser.add_argument('--performance-profile', choices=('rt20',), default=None,
+                        help='Locomani CPU profile targeting a soft 20 ms planning deadline.')
+    parser.add_argument('--anneal-iterations', type=int, default=None,
+                        help='Locomani refinement iterations (YAML default: 3).')
+    parser.add_argument('--horizon-noise-factor', type=float, default=None,
+                        help='Locomani horizon noise multiplier; 1 disables horizon decay.')
     parser.add_argument(
         '--plot',
         action='store_true',
@@ -130,4 +146,7 @@ if __name__ == "__main__":
         rollout_mode=args.rollout_mode,
         plot=args.plot,
         headless=args.headless,
+        anneal_iterations=args.anneal_iterations,
+        horizon_noise_factor=args.horizon_noise_factor,
+        performance_profile=args.performance_profile,
     )

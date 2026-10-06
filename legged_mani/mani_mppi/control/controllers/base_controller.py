@@ -26,9 +26,10 @@ class BaseMPPI:
     B2-Z1 model so task controllers only need to define their cost and update.
     """
 
-    def __init__(self, model_path: str | Path, config_path: str | Path):
+    def __init__(self, model_path: str | Path, config_path: str | Path, overrides=None):
         with Path(config_path).open("r", encoding="utf-8") as stream:
             self.params = yaml.safe_load(stream)
+        self.params.update(overrides or {})
 
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = float(self.params["dt"])
@@ -275,6 +276,14 @@ class BaseMPPI:
         initial = np.repeat(
             np.concatenate(([0.0], observation))[None, :], n_rollouts, axis=0
         )
+        if n_rollouts == 1:
+            # A single mean-validation rollout cannot use batch parallelism.
+            # Avoid a Future and a worker wakeup; keep its MjData thread-local.
+            if not hasattr(self.thread_local, "data"):
+                self._thread_initializer()
+            self._call_rollout(initial, controls, state_rollouts, sensor_rollouts)
+            self.last_rollout_sensors = sensor_rollouts
+            return state_rollouts[:, :, 1:]
         # Submit small chunks to the persistent worker pool instead of
         # assigning one fixed block to each worker. Contact-rich samples can
         # take substantially longer than contact-free samples, so dynamic
@@ -295,6 +304,8 @@ class BaseMPPI:
         ]
         for future in concurrent.futures.as_completed(futures):
             future.result()
+        # Keep sensors paired with this call, including single-plan validation.
+        self.last_rollout_sensors = sensor_rollouts
         return state_rollouts[:, :, 1:]
 
     def close(self) -> None:

@@ -255,47 +255,79 @@ class CEMWholeBodyArmMPPI(WholeBodyArmMPPI):
             self._arm_reference_target(),
         )
 
-    def _select_updated_actions(self, actions, costs_sum):
-        """Apply hard validity and MPPI weights to sampled trajectories."""
-        valid = (
-            np.asarray(self.collision_valid_rollouts, dtype=bool)
-            & np.isfinite(costs_sum)
-        )
-        if valid.shape != (self.n_samples,):
-            raise ValueError(
-                "collision_valid_rollouts must contain one flag per sample"
+    def _evaluate_execution_candidate(self, candidate):
+        """Re-evaluate a plan at the current state without replacing batch diagnostics."""
+        if not np.all(np.isfinite(candidate)):
+            return float("inf"), False
+        names = ("collision_valid_rollouts", "collision_min_clearance",
+                 "collision_exact_evaluations", "last_cost_terms")
+        saved = {name: getattr(self, name) for name in names if hasattr(self, name)}
+        try:
+            controls = candidate[None, :, :]
+            states = self.rollout_func(self.obs, controls)
+            costs = self.calculate_total_cost(
+                states, controls, self.joints_ref, self.body_ref,
+                rollout_sensors=self.last_rollout_sensors,
             )
+            cost = float(costs[0])
+            valid = bool(self.collision_valid_rollouts[0]) and np.isfinite(cost)
+            return cost, valid
+        finally:
+            for name in names:
+                if name in saved:
+                    setattr(self, name, saved[name])
+                elif hasattr(self, name):
+                    delattr(self, name)
 
+    def _select_updated_actions(self, actions, costs_sum):
+        """Execute a tested plan; use an average only if its new rollout improves it."""
+        costs_sum = np.asarray(costs_sum, dtype=float)
+        valid = (np.asarray(self.collision_valid_rollouts, dtype=bool)
+                 & np.isfinite(costs_sum)
+                 & np.all(np.isfinite(actions), axis=(1, 2)))
+        if valid.shape != (self.n_samples,):
+            raise ValueError("collision_valid_rollouts must contain one flag per sample")
+
+        self.exp_weights = np.zeros(self.n_samples, dtype=float)
+        self.cached_best_cost = float("inf")
+        self.best_sample_cost = float("inf")
+        self.mean_candidate_cost = float("inf")
+        self.execution_valid = False
+        self.selection_source = "rejected"
         if np.any(valid):
+            indices = np.flatnonzero(valid)
             valid_costs = costs_sum[valid]
-            min_cost = np.min(valid_costs)
-            self.cached_best_cost = float(min_cost)
-            cost_range = np.max(valid_costs) - min_cost
-            self.exp_weights = np.zeros(self.n_samples, dtype=float)
-            if cost_range < 1e-12:
-                self.exp_weights[valid] = 1.0
-            else:
-                self.exp_weights[valid] = np.exp(
-                    -((valid_costs - min_cost) / cost_range) / self.temperature
-                )
-            updated_actions = np.sum(
-                self.exp_weights[:, None, None] * actions,
-                axis=0,
-            ) / (np.sum(self.exp_weights) + 1e-10)
-            updated_actions = np.clip(
-                updated_actions,
-                self.act_min,
-                self.act_max,
-            )
-            self.last_safe_trajectory = updated_actions.copy()
+            best_index = indices[np.argmin(valid_costs)]
+            selected = actions[best_index].copy()
+            selected_cost = self.best_sample_cost = float(costs_sum[best_index])
+            self.selection_source = "best_sample"
+            cost_range = np.ptp(valid_costs)
+            weights = (np.ones(len(indices)) if cost_range < 1e-12 else
+                       np.exp(-((valid_costs - selected_cost) / cost_range)
+                              / self.temperature))
+            weights /= weights.sum()
+            self.exp_weights[valid] = weights
+            # Exclude invalid candidates rather than multiplying NaNs by zero.
+            mean = np.einsum("n,nij->ij", weights, actions[valid])
+            mean = np.clip(mean, self.act_min, self.act_max)
+            self.mean_candidate_cost, mean_valid = self._evaluate_execution_candidate(mean)
+            if mean_valid and self.mean_candidate_cost < selected_cost:
+                selected, selected_cost = mean, self.mean_candidate_cost
+                self.selection_source = "validated_mean"
         else:
-            self.cached_best_cost = float("inf")
-            self.exp_weights = np.zeros(self.n_samples, dtype=float)
-            updated_actions = np.empty_like(self.last_safe_trajectory)
-            updated_actions[:-1] = self.last_safe_trajectory[1:]
-            updated_actions[-1] = self.last_safe_trajectory[-1]
-            self.last_safe_trajectory = updated_actions.copy()
-        return updated_actions
+            # The old plan was tested at a different state. Never assume that
+            # shifting it preserves validity at the current state.
+            selected = np.concatenate((self.last_safe_trajectory[1:],
+                                       self.last_safe_trajectory[-1:]), axis=0)
+            selected_cost, fallback_valid = self._evaluate_execution_candidate(selected)
+            if not fallback_valid:
+                raise RuntimeError("No valid MPPI execution plan: shifted fallback failed revalidation")
+            self.selection_source = "validated_fallback"
+
+        self.execution_valid = True
+        self.cached_best_cost = float(selected_cost)
+        self.last_safe_trajectory = selected.copy()
+        return selected
 
     def _advance_selected_trajectory(
         self,

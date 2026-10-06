@@ -1,11 +1,13 @@
 """Whole-body MPPI controller for B2-Z1 locomani tasks."""
 
 import os
+import time
 
 import mujoco
 import numpy as np
 import yaml
 
+from mani_mppi.control.controllers.annealed_search import AnnealedSearchMixin
 from mani_mppi.control.controllers.cem_whole_body_controller import (
     CEMWholeBodyArmMPPI,
     EXECUTE_PLAN,
@@ -23,7 +25,7 @@ from mani_mppi.utils.transforms import batch_world_to_local_velocity
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-class MPPI(CEMWholeBodyArmMPPI):
+class MPPI(AnnealedSearchMixin, CEMWholeBodyArmMPPI):
     """MPPI controller for locomotion with an end-effector pose task.
 
     The arm IK reference provides a nominal joint posture, while the rollout
@@ -33,7 +35,8 @@ class MPPI(CEMWholeBodyArmMPPI):
     controller_label = "Locomani"
 
     def __init__(
-        self, task="locomani", rollout_mode="original_spline"
+        self, task="locomani", rollout_mode="original_spline",
+        anneal_iterations=None, horizon_noise_factor=None, performance_profile=None
     ) -> None:
         print("Task: ", task)
 
@@ -55,12 +58,22 @@ class MPPI(CEMWholeBodyArmMPPI):
         config_path = os.path.join(BASE_DIR, self.task_data["config_path"])
         model_path = os.path.join(BASE_DIR, "../..", self.task_data["model_path"])
 
+        if performance_profile not in (None, "rt20"):
+            raise ValueError("performance_profile must be None or rt20")
+        if performance_profile == "rt20" and rollout_mode != "hermite":
+            raise ValueError("rt20 requires rollout_mode=hermite")
+        self.performance_profile = performance_profile
+        overrides = ({"n_samples": 30, "n_workers": 10, "rollout_chunk_size": 1,
+                      "planning_budget_ms": 20.0, "validate_mean": True,
+                      "collision_broadphase": True}
+                     if performance_profile == "rt20" else {})
         # Initialize the MuJoCo model, MPPI sampler, and rollout workers.
-        super().__init__(model_path, config_path)
+        super().__init__(model_path, config_path, overrides=overrides)
 
         # Q/R and EE rollout costs are controller tuning parameters.
         with open(config_path, "r", encoding="utf-8") as stream:
             params = yaml.safe_load(stream)
+        params.update(overrides)
         self.state_cost_weights = np.asarray(params["Q_diag"], dtype=float)
         self.control_cost_weights = np.asarray(params["R_diag"], dtype=float)
         state_cost_dim = self.model.nq + self.model.nv - 1
@@ -205,6 +218,7 @@ class MPPI(CEMWholeBodyArmMPPI):
         self.set_noise_for_gait(self.default_gait)
         self._reset_gait_nominal(self.trajectory)
         self.last_safe_trajectory = self.trajectory.copy()
+        self._configure_search(params, anneal_iterations, horizon_noise_factor)
         print(f"Body reference keyframe: {body_keyframe}")
         print(f"Initial EE goal: {self.ee_goal_pos[0]}")
         print(f"IK arm reference: {np.round(self.arm_reference, 4)}")
@@ -459,6 +473,11 @@ class MPPI(CEMWholeBodyArmMPPI):
 
     def update(self, obs):
         """Run one complete CEM-guided whole-body MPPI update."""
+        if (self.rollout_mode == "hermite" or self.anneal_iterations > 1
+                or self.horizon_noise_factor != 1.0):
+            return self._update_annealed(obs)
+        started = time.perf_counter()
+        self.last_timing = {}
         # 1. Update the planned base motion and current arm IK reference.
         self.obs = np.asarray(obs, dtype=float)
         self._update_motion_reference(self.obs)
@@ -466,12 +485,18 @@ class MPPI(CEMWholeBodyArmMPPI):
         if self.nominal_from_gait:
             self._refresh_gait_nominal()
 
-        # 2. Sample controls and retain one noise-free safe baseline.
+        self.last_timing["reference"] = time.perf_counter() - started
+        tick = time.perf_counter()
+        # 2. Sample controls and retain one noise-free baseline for evaluation.
         actions = self.perturb_action()
         actions[0] = self._noise_free_rollout_candidate()
 
+        self.last_timing["sampling"] = time.perf_counter() - tick
+        tick = time.perf_counter()
         # 3. Roll out dynamics and build the phase-aligned gait/IK reference.
         rollout_states = self.rollout_func(self.obs, actions)
+        self.last_timing["rollout"] = time.perf_counter() - tick
+        tick = time.perf_counter()
         self.joints_ref = self._joint_reference()
         nominal_actions = self.joints_ref[:self.act_dim].T
 
@@ -483,16 +508,21 @@ class MPPI(CEMWholeBodyArmMPPI):
             self.body_ref,
             rollout_sensors=self.sensor_rollouts,
         )
-        updated_actions = self._select_updated_actions(
-            actions,
-            costs_sum,
-        )
+        self.last_timing["cost"] = time.perf_counter() - tick
+        tick = time.perf_counter()
+        try:
+            updated_actions = self._select_updated_actions(actions, costs_sum)
+        finally:
+            # Includes the extra rollout needed to validate the mean/fallback.
+            self.last_timing["selection"] = time.perf_counter() - tick
+            self.last_timing["total"] = time.perf_counter() - started
 
         # 5. Warm-start and advance the gait phase for the next update.
         self._advance_selected_trajectory(
             updated_actions,
             nominal_actions,
         )
+        self.last_timing["total"] = time.perf_counter() - started
         return updated_actions[0]
 
     def calculate_total_cost(
@@ -505,7 +535,7 @@ class MPPI(CEMWholeBodyArmMPPI):
     ):
         """Compute summed cost for all sampled trajectories."""
         num_samples, horizon = states.shape[:2]
-        flat_states = states.reshape(-1, states.shape[-1])
+        flat_states = states.reshape(-1, states.shape[-1]).copy()
         flat_actions = actions.reshape(-1, actions.shape[-1])
 
         # Direct EE task cost; IK remains a nominal arm-posture reference.
@@ -573,6 +603,15 @@ class MPPI(CEMWholeBodyArmMPPI):
             flat_states[:, 3:7], flat_states[:, 23:26]
         )
         costs = self.quadruped_cost_np(flat_states, flat_actions, x_ref)
+        # Diagnostics are per candidate; weights and the objective are unchanged.
+        self.last_cost_terms = {
+            "robot": costs.reshape(num_samples, horizon).sum(axis=1),
+            "ee_position": ee_position_cost.reshape(num_samples, horizon).sum(axis=1),
+            "ee_orientation": ee_orientation_cost.reshape(num_samples, horizon).sum(axis=1),
+            "ee_terminal": self.ee_terminal_scale * (
+                ee_position_cost + ee_orientation_cost
+            ).reshape(num_samples, horizon)[:, -1],
+        }
         costs += ee_position_cost + ee_orientation_cost
         costs = costs.reshape(num_samples, horizon)
 
