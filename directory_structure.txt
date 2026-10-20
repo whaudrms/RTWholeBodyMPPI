@@ -16,18 +16,26 @@
 │       ├── analysis
 │       │   └── ...
 │       ├── control
-│       │   ├── controllers
-│       │   │   ├── base_controller.py
-│       │   │   ├── configs
-│       │   │   │   ├── mppi_gait_config_big_box.yml
-│       │   │   │   ├── mppi_gait_config_climb_box_hw.yml
-│       │   │   │   ├── mppi_gait_config_push_box_hw.yml
-│       │   │   │   ├── mppi_gait_config_push_box.yml
-│       │   │   │   ├── mppi_gait_config_stairs.yml
-│       │   │   │   ├── mppi_gait_config_walk_hw.yml
-│       │   │   │   └── mppi_gait_config_walk.yml
-│       │   │   ├── mppi_locomanipulation.py
-│       │   │   └── mppi_locomotion.py
+│       │   ├── configs                  # Task YAML settings
+│       │   ├── tasks
+│       │   │   ├── base.py               # Go1 setup and task/solver integration
+│       │   │   ├── definitions.py        # Task registry
+│       │   │   ├── locomotion.py         # Goals and gait references
+│       │   │   └── locomanipulation.py
+│       │   ├── costs
+│       │   │   ├── locomotion.py
+│       │   │   └── locomanipulation.py
+│       │   ├── solvers
+│       │   │   ├── base.py               # Solver state and warm start
+│       │   │   ├── mppi.py               # Nominal / DIAL iterations
+│       │   │   ├── cma_mppi.py           # Diagonal covariance adaptation
+│       │   │   ├── mpopi.py              # Elite full-covariance adaptation
+│       │   │   ├── mbd.py                # Model-based diffusion
+│       │   │   ├── sampling.py           # Gaussian / cubic sampling
+│       │   │   └── options.py            # CLI mode selection
+│       │   ├── rollouts
+│       │   │   └── mujoco.py             # Parallel MuJoCo workers
+│       │   ├── controllers              # Compatibility imports only
 │       │   ├── gait_scheduler
 │       │   │   ├── gaits
 │       │   │   │   ├── FAST

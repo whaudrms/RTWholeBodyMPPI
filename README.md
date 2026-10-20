@@ -217,8 +217,21 @@ You can check if the controller is running at 100 Hz with this command:
 rostopic hz /joint_controller_FL_calf/cmd 
 ```
 
+## Control Code Organization
+
+Task controllers and reference generation live in `control/tasks/`, task costs
+in `control/costs/`, optimization and sampling in `control/solvers/`, and
+parallel MuJoCo integration in `control/rollouts/`. These directories are under
+`legged_mppi/whole_body_mppi/`. Existing controller imports remain available
+through compatibility modules. See [the control structure guide](legged_mppi/docs/control_structure.md)
+for module boundaries, imports, and configuration paths.
+
+Run MPOPI with `PYTHONPATH=legged_mppi python legged_mppi/scripts/simulate_mppi.py --task walk_straight --mpopi`.
+See [MPOPI settings and behavior](legged_mppi/docs/mpopi.md).
+Use `--mbd` for model-based diffusion; see [MBD settings and behavior](legged_mppi/docs/mbd.md).
+
 ## Definitions
-Tasks are defined in the `legged_mppi/whole_body_mppi/utils/tasks.py` file. This file contains the descrition of every task as a dictionary containing the following variables:
+Tasks are defined in the `legged_mppi/whole_body_mppi/control/tasks/definitions.py` file. This file contains the descrition of every task as a dictionary containing the following variables:
 
 | **Parameter**       | **Description**                                                                                          |
 |----------------------|----------------------------------------------------------------------------------------------------------|
@@ -234,13 +247,13 @@ Tasks are defined in the `legged_mppi/whole_body_mppi/utils/tasks.py` file. This
 
 ### Hyperparameter Configuration
 
-MPPI hyperparameters are defined in YAML configuration files located in `legged_mppi/control/controllers/configs`.
+MPPI hyperparameters are defined in YAML configuration files located in `legged_mppi/whole_body_mppi/control/configs`.
 These configuration files include:
 
 #### **Simulation Parameters**
 - **Time step (`dt`)**: Defines the simulation's time step size.
 - **Horizon length (`horizon`)**: Specifies how many future steps are considered in planning.
-- **Number of samples (`n_samples`)**: The number of trajectories sampled during planning.
+- **Number of samples (`n_samples`)**: Total trajectory budget per control update, shared by all solvers. Split across `n_iterations` (10/3 gives 4+3+3); MPPI uses the full budget once. Require `n_samples >= 2 * n_iterations`.
 - **Noise parameters (`noise_sigma`)**: The standard deviation of noise added to sampled trajectories.
 
 #### **Cost Weights**
@@ -282,18 +295,26 @@ RTWholeBodyMPPI/
 │       ├── analysis
 │       │   └── ...
 │       ├── control
-│       │   ├── controllers
-│       │   │   ├── base_controller.py
-│       │   │   ├── configs
-│       │   │   │   ├── mppi_gait_config_big_box.yml
-│       │   │   │   ├── mppi_gait_config_climb_box_hw.yml
-│       │   │   │   ├── mppi_gait_config_push_box_hw.yml
-│       │   │   │   ├── mppi_gait_config_push_box.yml
-│       │   │   │   ├── mppi_gait_config_stairs.yml
-│       │   │   │   ├── mppi_gait_config_walk_hw.yml
-│       │   │   │   └── mppi_gait_config_walk.yml
-│       │   │   ├── mppi_locomanipulation.py
-│       │   │   └── mppi_locomotion.py
+│       │   ├── configs                  # Task YAML settings
+│       │   ├── tasks
+│       │   │   ├── base.py               # Go1 setup and task/solver integration
+│       │   │   ├── definitions.py        # Task registry
+│       │   │   ├── locomotion.py         # Goals and gait references
+│       │   │   └── locomanipulation.py
+│       │   ├── costs
+│       │   │   ├── locomotion.py
+│       │   │   └── locomanipulation.py
+│       │   ├── solvers
+│       │   │   ├── base.py               # Solver state and warm start
+│       │   │   ├── mppi.py               # Nominal / DIAL iterations
+│       │   │   ├── cma_mppi.py           # Diagonal covariance adaptation
+│       │   │   ├── mpopi.py              # Elite full-covariance adaptation
+│       │   │   ├── mbd.py                # Model-based diffusion
+│       │   │   ├── sampling.py           # Gaussian / cubic sampling
+│       │   │   └── options.py            # CLI mode selection
+│       │   ├── rollouts
+│       │   │   └── mujoco.py             # Parallel MuJoCo workers
+│       │   ├── controllers              # Compatibility imports only
 │       │   ├── gait_scheduler
 │       │   │   ├── gaits
 │       │   │   │   ├── FAST

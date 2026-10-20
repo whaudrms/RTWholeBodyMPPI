@@ -5,8 +5,11 @@
 # MPPI Parameters
 # These control the behavior of the Model Predictive Path Integral optimization.
 dt: 0.01          # Time step size for simulation (in seconds).
-n_samples: 30     # Number of trajectory samples per iteration.
-lambda: 0.1       # Temperature parameter for trajectory cost weighting.
+n_samples: 30     # Total trajectory samples per control update, split across iterations.
+n_iterations: 3  # Optimization passes per control update.
+beta_iteration: 0.5  # Covariance annealing across iterations.
+beta_horizon: 0.5    # Covariance annealing across horizon knots/steps.
+lambda: 0.15       # Temperature parameter for trajectory cost weighting.
 horizon: 40       # Prediction horizon (number of time steps).
 n_workers: 5      # Number of parallel workers for optimization.
 seed: 42          # Random seed for reproducibility.
@@ -49,8 +52,8 @@ noise_sigma:
 # Diagonal entries of the state cost matrix Q
 # Higher values penalize deviations from reference states more heavily.
 Q_diag:
-  - 300    # x-position
-  - 300    # y-position
+  - 500    # x-position
+  - 500    # y-position
   - 500   # z-position (height)
   - 400000 # Quaternion distance
   - 0      # -
@@ -71,9 +74,9 @@ Q_diag:
   - 1      # x velocity
   - 0.0001 # y velocity
   - 0.0001 # z velocity
-  - 0.0001 # Angular velocity (x)
-  - 0.0001 # Angular velocity (y)
-  - 0.0001 # Angular velocity (z)
+  - 0.01 # Angular velocity (x)
+  - 0.01 # Angular velocity (y)
+  - 0.01 # Angular velocity (z)
   - 0.1    # Hip joint velocity (FR)
   - 0.1    # Thigh joint velocity (FR)
   - 0.1    # Calf joint velocity (FR)

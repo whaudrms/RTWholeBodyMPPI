@@ -5,10 +5,13 @@
 # MPPI Parameters
 # These control the behavior of the Model Predictive Path Integral optimization.
 dt: 0.01          # Time step size for simulation (in seconds).
-n_samples: 30     # Number of trajectory samples per iteration.
-lambda: 0.12      # Temperature parameter for trajectory cost weighting.
+n_samples: 30     # Total trajectory samples per control update, split across iterations.
+n_iterations: 3  # Optimization passes per control update.
+beta_iteration: 0.5  # Covariance annealing across iterations.
+beta_horizon: 0.5    # Covariance annealing across horizon knots/steps.
+lambda: 0.1       # Temperature parameter for trajectory cost weighting.
 horizon: 40       # Prediction horizon (number of time steps).
-n_workers: 15     # Number of parallel workers for optimization.
+n_workers: 5      # Number of parallel workers for optimization.
 seed: 42          # Random seed for reproducibility.
 
 # ============================
@@ -30,45 +33,45 @@ n_knots: 4          # Number of control points (knots) in the spline.
 # Noise standard deviations applied to control inputs for exploration.
 noise_sigma:
   - 0.06 # Hip joint (Front Right - FR)
-  - 0.1  # Thigh joint (FR)
-  - 0.1  # Calf joint (FR)
+  - 0.2  # Thigh joint (FR)
+  - 0.2  # Calf joint (FR)
   - 0.06 # Hip joint (Front Left - FL)
-  - 0.1  # Thigh joint (FL)
-  - 0.1  # Calf joint (FL)
+  - 0.2  # Thigh joint (FL)
+  - 0.2  # Calf joint (FL)
   - 0.06 # Hip joint (Rear Right - RR)
-  - 0.1  # Thigh joint (RR)
-  - 0.1  # Calf joint (RR)
+  - 0.2  # Thigh joint (RR)
+  - 0.2  # Calf joint (RR)
   - 0.06 # Hip joint (Rear Left - RL)
-  - 0.1  # Thigh joint (RL)
-  - 0.1  # Calf joint (RL)
+  - 0.2  # Thigh joint (RL)
+  - 0.2  # Calf joint (RL)
 
 # ============================
-# Cost Function Parameters for Robot
+# Cost Function Parameters
 # ============================
 
-# Diagonal entries of the state cost matrix Q_robot
+# Diagonal entries of the state cost matrix Q
 # Higher values penalize deviations from reference states more heavily.
-Q_robot:
-  - 200    # x-position
-  - 200    # y-position
-  - 500    # z-position (height)
-  - 600000 # Quaternion distance cost
+Q_diag:
+  - 7000   # x-position
+  - 7000   # y-position
+  - 15000  # z-position (height)
+  - 350000 # Quaternion distance cost
   - 0      # Does not matter
   - 0      # Does not matter
   - 0      # Does not matter
-  - 800    # Hip joint (FR)
-  - 800    # Thigh joint (FR)
-  - 800    # Calf joint (FR)
-  - 800    # Hip joint (FL)
-  - 800    # Thigh joint (FL)
-  - 800    # Calf joint (FL)
-  - 800    # Hip joint (RR)
-  - 800    # Thigh joint (RR)
-  - 800    # Calf joint (RR)
-  - 800    # Hip joint (RL)
-  - 800    # Thigh joint (RL)
-  - 800    # Calf joint (RL)
-  - 1      # x velocity
+  - 700    # Hip joint (FR)
+  - 700    # Thigh joint (FR)
+  - 700    # Calf joint (FR)
+  - 700    # Hip joint (FL)
+  - 700    # Thigh joint (FL)
+  - 700    # Calf joint (FL)
+  - 700    # Hip joint (RR)
+  - 700    # Thigh joint (RR)
+  - 700    # Calf joint (RR)
+  - 700    # Hip joint (RL)
+  - 700    # Thigh joint (RL)
+  - 700    # Calf joint (RL)
+  - 0.0001 # x velocity
   - 0.0001 # y velocity
   - 0.0001 # z velocity
   - 0.0001 # Angular velocity (x)
@@ -87,33 +90,7 @@ Q_robot:
   - 0.1    # Thigh joint velocity (RL)
   - 0.1    # Calf joint velocity (RL)
 
-# ============================
-# Cost Function Parameters for Box
-# ============================
-
-# Diagonal entries of the state cost matrix Q_box
-# Higher values penalize deviations from the box's reference states.
-Q_box:
-  - 1000   # x-position
-  - 1500   # y-position
-  - 0      # z-position
-
-# Reference position for the box
-box_pos_ref:
-  - 2.0    # x-position
-  - 1.0    # y-position
-  - 0.3    # z-position (irrelevant in this context)
-
-# Reference orientation (quaternion) for the box
-box_quat_ref:
-  - 1.0    # Quaternion w
-  - 0.0    # Quaternion x
-  - 0.0    # Quaternion y
-  - 0.0    # Quaternion z
-
-# ============================
-# Control Cost Matrix R
-# ============================
+# Diagonal entries of the control cost matrix R
 # Penalizes excessive control effort (torque commands).
 R_diag:
   - 0.001 # Hip joint (FR)

@@ -1,12 +1,13 @@
 import numpy as np
 import os
 from whole_body_mppi.interface.simulator import Simulator
-from whole_body_mppi.control.controllers.mppi_locomotion import MPPI
-from whole_body_mppi.utils.tasks import get_task
+from whole_body_mppi.control.tasks.locomotion import LocomotionController
+from whole_body_mppi.control.tasks.definitions import get_task
 
 import argparse
+from whole_body_mppi.control.solvers.options import add_mppi_mode_arguments, apply_mppi_mode
 
-def main(task):
+def main(task, mppi_mode=None):
     T = 2000  # 20 seconds
     VIEWER = True
 
@@ -26,7 +27,8 @@ def main(task):
     sim_path = os.path.join(os.path.dirname(__file__), "../whole_body_mppi", task_data["sim_path"])
 
     # Initialize agent and simulator
-    agent = MPPI(task=task)
+    agent = LocomotionController(task=task)
+    apply_mppi_mode(agent, mppi_mode)
     # agent.set_params(horizon=CTRL_HORIZON, lambda_=CTRL_LAMBDA, N=CTRL_N_SAMPLES)
     simulator = Simulator(agent=agent, viewer=VIEWER, T=T, dt=SIMULATION_STEP, timeconst=TIMECONST,
                           dampingratio=DAMPINGRATIO, model_path=sim_path, ctrl_rate=CTRL_UPDATE_RATE)
@@ -44,7 +46,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run simulation with a specified task.")
     parser.add_argument('--task', type=str, required=True, choices=VALID_TASKS, 
                         help=f"Name of the task. Must be one of {VALID_TASKS}.")
+    add_mppi_mode_arguments(parser)
     args = parser.parse_args()
 
     # Run main with the provided task
-    main(args.task)
+    main(args.task, args.mppi_mode)

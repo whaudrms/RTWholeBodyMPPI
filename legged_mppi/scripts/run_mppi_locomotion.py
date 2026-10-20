@@ -1,12 +1,13 @@
 import rospy
 import argparse
+from whole_body_mppi.control.solvers.options import add_mppi_mode_arguments, apply_mppi_mode
 import numpy as np
-from whole_body_mppi.control.controllers.mppi_locomotion import MPPI
+from whole_body_mppi.control.tasks.locomotion import LocomotionController
 from scipy.spatial.transform import Rotation as R
 
 from unitree_legged_msgs.msg import MotorState, MotorCmd
 from nav_msgs.msg import Odometry
-from whole_body_mppi.utils.tasks import get_task
+from whole_body_mppi.control.tasks.definitions import get_task
 
 KP_HIP_GAIN, KD_HIP_GAIN = 55, 3
 KP_THIGH_GAIN, KD_THIGH_GAIN = 55, 3
@@ -83,7 +84,7 @@ class Controller:
         rospy.Subscriber(self.position_topic, Odometry, self.ori_callback)
         rospy.Subscriber(self.velocity_topic, Odometry, self.vel_callback)
 
-    def loop(self, task):
+    def loop(self, task, mppi_mode=None):
         rospy.init_node('controller_quadruped', anonymous=True)
         rate = rospy.Rate(100) 
 
@@ -101,7 +102,8 @@ class Controller:
             rospy.signal_shutdown("No messages received, shutting down node")
             return
 
-        mppi = MPPI(task)
+        mppi = LocomotionController(task)
+        apply_mppi_mode(mppi, mppi_mode)
 
         mppi.internal_ref = True
         mppi.body_ref[:2] = self.body_xy
@@ -171,6 +173,7 @@ if __name__ == "__main__":
     parser.add_argument('--task', type=str, required=True, choices=VALID_TASKS, help="Which task to run")
     parser.add_argument('--pose_source', type=str, required=True, choices=['mocap', 'gazebo', 'ekf'],
                         help="Choose source for pose: mocap, gazebo, or ekf")
+    add_mppi_mode_arguments(parser)
     args = parser.parse_args()
 
     # Topic mapping
@@ -188,4 +191,4 @@ if __name__ == "__main__":
 
     controller = Controller(position_topic=position_topic,
                             velocity_topic=velocity_topic)
-    controller.loop(args.task)
+    controller.loop(args.task, args.mppi_mode)

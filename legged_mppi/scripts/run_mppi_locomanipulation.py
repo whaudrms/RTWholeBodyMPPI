@@ -1,12 +1,13 @@
 import rospy
 import argparse
+from whole_body_mppi.control.solvers.options import add_mppi_mode_arguments, apply_mppi_mode
 import numpy as np
-from whole_body_mppi.control.controllers.mppi_locomanipulation import MPPI_box_push
+from whole_body_mppi.control.tasks.locomanipulation import LocomanipulationController
 from scipy.spatial.transform import Rotation as R
 
 from unitree_legged_msgs.msg import MotorState, MotorCmd
 from nav_msgs.msg import Odometry
-from whole_body_mppi.utils.tasks import get_task
+from whole_body_mppi.control.tasks.definitions import get_task
 
 KP_HIP_GAIN, KD_HIP_GAIN = 55, 3
 KP_THIGH_GAIN, KD_THIGH_GAIN = 55, 3
@@ -92,7 +93,7 @@ class Controller:
         rospy.Subscriber(self.velocity_topic, Odometry, self.vel_callback)
         rospy.Subscriber(self.box_topic, Odometry, self.box_callback)
 
-    def loop(self, task):
+    def loop(self, task, mppi_mode=None):
         rospy.init_node('controller_quadruped', anonymous=True)
         rate = rospy.Rate(100) 
 
@@ -111,7 +112,8 @@ class Controller:
             rospy.signal_shutdown("No messages received, shutting down node")
             return
 
-        mppi = MPPI_box_push(task)
+        mppi = LocomanipulationController(task)
+        apply_mppi_mode(mppi, mppi_mode)
 
         mppi.internal_ref = True
         mppi.body_ref[:2] = self.body_xy
@@ -182,6 +184,10 @@ class Controller:
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser()
+    add_mppi_mode_arguments(parser)
+    args = parser.parse_args()
+
     task = "push_box_hw"
     position_topic = '/mocap_node/Go1_body/Odom'
     velocity_topic = '/odom'
@@ -190,4 +196,4 @@ if __name__ == "__main__":
     controller = Controller(position_topic=position_topic,
                             velocity_topic=velocity_topic,
                             box_topic=box_topic)
-    controller.loop(task)
+    controller.loop(task, args.mppi_mode)
