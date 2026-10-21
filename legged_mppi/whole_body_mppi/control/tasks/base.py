@@ -13,10 +13,10 @@ GAIT_DIR = CONTROL_ROOT / 'gait_scheduler/gaits'
 
 
 class BaseTaskController(MPPISolver):
-    def __init__(self, model_path, config_path):
+    def __init__(self, model_path, config_path, *, model=None):
         with open(config_path, encoding='utf-8') as stream:
             self.params = yaml.safe_load(stream)
-        model = mujoco.MjModel.from_xml_path(str(model_path))
+        model = model if model is not None else mujoco.MjModel.from_xml_path(str(model_path))
         model.opt.timestep = self.params['dt']
         model.opt.enableflags = 1
         model.opt.o_solref = np.array(self.params['o_solref'])

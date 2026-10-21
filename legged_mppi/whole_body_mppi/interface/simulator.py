@@ -1,6 +1,5 @@
 import mujoco
 import os
-import mujoco_viewer
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -36,17 +35,24 @@ class Simulator:
                 T = 200, dt = 0.01, viewer = True, gravity = True,
                 # stiff=False
                 timeconst=0.02, dampingratio=1.0, ctrl_rate=100,
-                save_dir="./frames", save_frames=False
+                save_dir="./frames", save_frames=False, robot="go1", initial_key=1, model_variant="full"
                 ):
         # filter
 
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.agent = agent
         self.ctrl_rate = ctrl_rate
-        self.update_ratio = max(1, 1/(dt*ctrl_rate))
+        ratio = 1 / (dt * ctrl_rate)
+        if ratio < 1 or not np.isclose(ratio, round(ratio)):
+            raise ValueError('Control period must be an integer multiple of physics timestep')
+        self.update_ratio = round(ratio)
         self.interpolate_cam = False
         # model
-        self.model = mujoco.MjModel.from_xml_path(str(model_path))
+        if robot == 'go1_dm':
+            from whole_body_mppi.models.go1_dm.rollout_model import load_runtime_model
+            self.model = load_runtime_model(model_path, model_variant, dt)
+        else:
+            self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = dt
         #self.model.opt.enableflags = 1 # to override contact settings
         self.model.opt.o_solref = np.array([timeconst, dampingratio])
@@ -58,13 +64,20 @@ class Simulator:
         self.save_dir = save_dir
         # rollout
         mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos = self.model.key_qpos[1]
-        self.data.qvel = self.model.key_qvel[1]
-        self.data.ctrl = self.model.key_ctrl[1]
+        key_id = self.model.key(initial_key).id if isinstance(initial_key, str) else initial_key
+        mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
+        mujoco.mj_forward(self.model, self.data)
 
+        # The display model is independent of rollout/physics complexity.
+        self.robot = robot
+        self.model_path = model_path
+        self.render_model, self.render_data = self.model, self.data
+        self._detailed_visual = None
         # viewer
         if viewer:
-            self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data, hide_menus=True)
+            self.initialize_rendering()
+            import mujoco_viewer
+            self.viewer = mujoco_viewer.MujocoViewer(self.render_model, self.render_data, hide_menus=True)
         else:
             self.viewer = None
 
@@ -74,10 +87,25 @@ class Simulator:
         self.ctrl = np.zeros((self.model.nu, self.T))
         self.time = np.zeros(self.T)
         self.cost = np.zeros((1, self.T))
+        self.ee_errors = np.zeros(self.T) if hasattr(agent, 'ee_objective') else None
+        self.ee_positions = np.zeros((3, self.T)) if self.ee_errors is not None else None
 
         # Ensure the directory exists
         if self.save_frames and not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
+
+    def initialize_rendering(self):
+        """Lazily load detailed DM visuals; headless runs avoid this work."""
+        if self.robot == 'go1_dm' and self._detailed_visual is None:
+            from whole_body_mppi.models.go1_dm.visualization import DetailedDMVisual
+            self._detailed_visual = DetailedDMVisual(self.model_path, self.model)
+            self.render_model = self._detailed_visual.model
+            self.render_data = self._detailed_visual.data
+        self.sync_render_state()
+
+    def sync_render_state(self):
+        if self._detailed_visual is not None:
+            self._detailed_visual.sync(self.data)
 
     def step(self, ctrl=None):
         self.data.ctrl[:] = ctrl
@@ -89,7 +117,20 @@ class Simulator:
         self.qvel[:, t] = self.data.qvel
         self.ctrl[:, t] = self.data.ctrl
         self.time[t] = self.data.time
-        self.cost[0, t] = self.agent.eval_best_trajectory()
+        if self.ee_errors is not None:
+            objective = self.agent.ee_objective
+            position = objective.positions(self.data.qpos)
+            if objective.frame == 'world':
+                self.ee_positions[:, t] = position
+            else:
+                from whole_body_mppi.control.costs.end_effector import quaternion_matrix
+                self.ee_positions[:, t] = self.data.qpos[:3]+quaternion_matrix(self.data.qpos[3:7])@position
+            self.ee_errors[t] = np.linalg.norm(position-objective.target)
+        if self.agent is not None:
+            if t % self.update_ratio == 0 or t == self.T - 1:
+                self.cost[0, t] = self.agent.eval_best_trajectory()
+            elif t:
+                self.cost[0, t] = self.cost[0, t-1]
         return None
     
     def state_difference(self, pos1, pos2):
@@ -126,6 +167,7 @@ class Simulator:
 
     def run(self):
         tqdm_range = tqdm.tqdm(range(self.T-1))
+        action = self.data.ctrl.copy()
         for t in tqdm_range:
             self.t = t
             self.store_trajectory(t)
@@ -139,10 +181,17 @@ class Simulator:
             mujoco.mj_step(self.model, self.data)
             
             error = np.linalg.norm(np.array(self.agent.body_ref[:3]) - np.array(self.data.qpos[:3]))
-            if error < self.agent.goal_thresh[self.agent.goal_index]:
+            if t % self.update_ratio == 0 and error < self.agent.goal_thresh[self.agent.goal_index]:
                 self.agent.next_goal()
 
-            if self.viewer is not None and self.viewer.is_alive:
+            if self.viewer is not None and not self.viewer.is_alive:
+                break
+            if self.viewer is not None and t % self.update_ratio == 0:
+                self.sync_render_state()
+                if self.ee_errors is not None:
+                    self.viewer.add_marker(pos=self.agent.ee_objective.target_world(self.data.qpos),
+                                           size=[0.025]*3, rgba=[0, 1, 0, 0.8],
+                                           type=mujoco.mjtGeom.mjGEOM_SPHERE, label='EE target')
                 self.viewer.add_marker(
                     pos=self.agent.body_ref[:3]*1,         # Position of the marker
                     size=[0.15, 0.15, 0.15],     # Size of the sphere
@@ -175,6 +224,8 @@ class Simulator:
                                                                                                  self.agent.n_samples, \
                                                                                                  self.T,\
                                                                                                  self.agent.task)
+        if getattr(self.agent, 'robot', 'go1') != 'go1':
+            trajectory_name = self.agent.robot + '_' + trajectory_name
         analysis_path = os.path.join(base_folfer, trajectory_name)
                                                                                                                                                
         np.savetxt(analysis_path, self.cost, delimiter='\t')
@@ -219,6 +270,11 @@ class Simulator:
         plt.legend()
         plt.xlabel("Time (s)")
         plt.ylabel("Control (angles)")
+        if self.ee_errors is not None:
+            plt.figure()
+            plt.plot(self.time, self.ee_errors)
+            plt.xlabel("Time (s)")
+            plt.ylabel("EE position error (m)")
         plt.show()
         
         return None

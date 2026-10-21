@@ -5,7 +5,7 @@
 # MPPI Parameters
 # These control the behavior of the Model Predictive Path Integral optimization.
 dt: 0.01          # Time step size for simulation (in seconds).
-n_samples: 30     # Total trajectory samples per control update, split across iterations.
+n_samples: 120     # Total trajectory samples per control update, split across iterations.
 n_iterations: 3  # Optimization passes per control update.
 beta_iteration: 0.5  # Covariance annealing across iterations.
 beta_horizon: 0.5    # Covariance annealing across horizon knots/steps.

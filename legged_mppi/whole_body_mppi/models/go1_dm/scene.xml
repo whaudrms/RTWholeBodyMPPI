@@ -1,0 +1,432 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="Go1 + B601-DM (generated; see README.md)">
+  <include file="../common.xml" />
+  <size memory="16M" />
+  <custom>
+    <numeric name="estimator" data="1" />
+  </custom>
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
+    <global azimuth="-90" offheight="1024" offwidth="1024" />
+  </visual>
+  <statistic extent="1" center="0 0 .3" />
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" diffuse="0.5 0.5 0.5" specular="0.3 0.3 0.3" directional="true" castshadow="false" />
+    <geom name="floor" size="0 0 0.1" pos="0 0 -0.01" type="plane" material="blue_grid" />
+  </worldbody>
+  <default>
+    <default class="torque">
+      <general gainprm="60" ctrllimited="true" ctrlrange="-1 1" />
+    </default>
+    <default class="task">
+      <site rgba="1 0 0 1" size=".02" group="5" />
+      <default class="flight">
+        <site rgba="1 .3 .3 1" size="0.019" group="5" />
+      </default>
+      <default class="stance">
+        <site rgba=".3 1 .3 1" size=".018" group="4" />
+      </default>
+    </default>
+    <default class="prop">
+      <geom type="box" rgba="0 0.4 1 1" />
+    </default>
+  </default>
+  <compiler angle="radian" meshdir="." autolimits="true" />
+  <option cone="elliptic" impratio="100" timestep="0.002" integrator="implicitfast" />
+  <default>
+    <default class="go1">
+      <geom friction="0.6" margin="0.001" condim="1" />
+      <joint axis="0 1 0" damping="2" armature="0.01" frictionloss="0.2" />
+      <general forcerange="-23.7 23.7" biastype="affine" gainprm="55 0 0 0 0 0 0 0 0 0" biasprm="0 -55 -3 0 0 0 0 0 0 0" />
+      <default class="abduction">
+        <joint axis="1 0 0" damping="1" range="-0.863 0.863" />
+        <general ctrlrange="-0.863 0.863" />
+      </default>
+      <default class="hip">
+        <joint range="-0.686 4.501" />
+        <general ctrlrange="-0.686 4.501" />
+      </default>
+      <default class="knee">
+        <joint range="-2.818 -0.888" />
+        <general ctrlrange="-2.818 -0.888" forcerange="-35.55 35.55" />
+      </default>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2" material="dark" />
+      </default>
+      <default class="collision">
+        <geom group="3" type="capsule" />
+        <default class="hip_left1">
+          <geom size="0.046 0.02" pos="0 0.045 0" quat="1 1 0 0" type="cylinder" />
+        </default>
+        <default class="hip_left2">
+          <geom size="0.031 0.02" pos="0 0.065 0" quat="1 1 0 0" type="cylinder" />
+        </default>
+        <default class="hip_left3">
+          <geom size="0.046 0.02" quat="1 1 0 0" type="cylinder" />
+        </default>
+        <default class="hip_right1">
+          <geom size="0.046 0.02" pos="0 -0.045 0" quat="1 1 0 0" type="cylinder" />
+        </default>
+        <default class="hip_right2">
+          <geom size="0.031 0.02" pos="0 -0.065 0" quat="1 1 0 0" type="cylinder" />
+        </default>
+        <default class="hip_right3">
+          <geom size="0.046 0.02" quat="1 1 0 0" type="cylinder" />
+        </default>
+        <default class="thigh1">
+          <geom size="0.015" fromto="-0.02 0 0 -0.02 0 -0.16" />
+        </default>
+        <default class="thigh2">
+          <geom size="0.015" fromto="0 0 0 -0.02 0 -0.1" />
+        </default>
+        <default class="thigh3">
+          <geom size="0.015" fromto="-0.02 0 -0.16 0 0 -0.2" />
+        </default>
+        <default class="calf1">
+          <geom size="0.01" fromto="0 0 0 0.02 0 -0.13" />
+        </default>
+        <default class="calf2">
+          <geom size="0.01" fromto="0.02 0 -0.13 0 0 -0.2" />
+        </default>
+        <default class="foot">
+          <geom type="sphere" size="0.023" pos="0 0 -0.213" priority="1" solimp="0.015 1 0.031" condim="6" friction="0.8 0.02 0.01" />
+        </default>
+      </default>
+    </default>
+  </default>
+  <asset>
+    <material name="dark" rgba="0.1 0.1 0.1 1" />
+    <mesh class="go1" file="../go1/assets/trunk.stl" />
+    <mesh class="go1" file="../go1/assets/hip.stl" />
+    <mesh class="go1" file="../go1/assets/thigh_mirror.stl" />
+    <mesh class="go1" file="../go1/assets/calf.stl" />
+    <mesh class="go1" file="../go1/assets/thigh.stl" />
+  </asset>
+  <worldbody>
+    <light name="spotlight" mode="targetbodycom" target="trunk" pos="0 -1 2" />
+    <body name="trunk" pos="0 0 0.445" childclass="go1">
+      <camera name="tracking" mode="trackcom" pos="0 -1 0.8" xyaxes="1 0 0 0 1 1" />
+      <site name="head" pos="0.3 0 0" rgba="1 0 0 1" size="0.02" group="5" />
+      <inertial pos="0.0223 0.002 -0.0005" quat="-0.00342088 0.705204 0.000106698 0.708996" mass="5.204" diaginertia="0.0716565 0.0630105 0.0168101" />
+      <freejoint />
+      <geom class="visual" mesh="trunk" />
+      <geom class="collision" size="0.125 0.04 0.057" type="box" />
+      <geom class="collision" quat="1 0 1 0" pos="0 -0.04 0" size="0.058 0.125" type="cylinder" />
+      <geom class="collision" quat="1 0 1 0" pos="0 +0.04 0" size="0.058 0.125" type="cylinder" />
+      <geom class="collision" pos="0.25 0 0" size="0.005 0.06 0.05" type="box" />
+      <geom class="collision" pos="0.25 0.06 -0.01" size="0.009 0.035" />
+      <geom class="collision" pos="0.25 -0.06 -0.01" size="0.009 0.035" />
+      <geom class="collision" pos="0.25 0 -0.05" size="0.01 0.06" quat="1 1 0 0" />
+      <geom class="collision" pos="0.255 0 0.0355" size="0.021 0.052" quat="1 1 0 0" />
+      <site name="imu" pos="0 0 0" />
+      <body name="FR_hip" pos="0.1881 -0.04675 0">
+        <inertial pos="-0.0049166 0.00762615 -8.865e-05" quat="0.507341 0.514169 0.495027 0.482891" mass="0.68" diaginertia="0.000734064 0.000468438 0.000398719" />
+        <joint class="abduction" name="FR_hip_joint" />
+        <geom class="visual" mesh="hip" quat="1 0 0 0" />
+        <geom class="hip_right1" />
+        <geom class="hip_right2" />
+        <body name="FR_thigh" pos="0 -0.08 0">
+          <inertial pos="-0.00304722 0.019315 -0.0305004" quat="0.65243 -0.0272313 0.0775126 0.753383" mass="1.009" diaginertia="0.00478717 0.00460903 0.000709268" />
+          <joint class="hip" name="FR_thigh_joint" />
+          <geom class="visual" mesh="thigh_mirror" />
+          <geom class="thigh1" />
+          <geom class="thigh2" />
+          <geom class="thigh3" />
+          <body name="FR_calf" pos="0 0 -0.213">
+            <inertial pos="0.00429862 0.000976676 -0.146197" quat="0.691246 0.00357467 0.00511118 0.722592" mass="0.195862" diaginertia="0.00149767 0.00148468 3.58427e-05" />
+            <joint class="knee" name="FR_calf_joint" />
+            <geom class="visual" mesh="calf" />
+            <geom class="calf1" />
+            <geom class="calf2" />
+            <geom name="FR" class="foot" />
+            <site name="FR" pos="0 0 -0.213" type="sphere" size="0.023" group="5" />
+          </body>
+        </body>
+      </body>
+      <body name="FL_hip" pos="0.1881 0.04675 0">
+        <inertial pos="-0.0049166 -0.00762615 -8.865e-05" quat="0.482891 0.495027 0.514169 0.507341" mass="0.68" diaginertia="0.000734064 0.000468438 0.000398719" />
+        <joint class="abduction" name="FL_hip_joint" />
+        <geom class="visual" mesh="hip" />
+        <geom class="hip_left1" />
+        <geom class="hip_left2" />
+        <body name="FL_thigh" pos="0 0.08 0">
+          <inertial pos="-0.00304722 -0.019315 -0.0305004" quat="0.753383 0.0775126 -0.0272313 0.65243" mass="1.009" diaginertia="0.00478717 0.00460903 0.000709268" />
+          <joint class="hip" name="FL_thigh_joint" />
+          <geom class="visual" mesh="thigh" />
+          <geom class="thigh1" />
+          <geom class="thigh2" />
+          <geom class="thigh3" />
+          <body name="FL_calf" pos="0 0 -0.213">
+            <inertial pos="0.00429862 0.000976676 -0.146197" quat="0.691246 0.00357467 0.00511118 0.722592" mass="0.195862" diaginertia="0.00149767 0.00148468 3.58427e-05" />
+            <joint class="knee" name="FL_calf_joint" />
+            <geom class="visual" mesh="calf" />
+            <geom class="calf1" />
+            <geom class="calf2" />
+            <geom name="FL" class="foot" />
+            <site name="FL" pos="0 0 -0.213" type="sphere" size="0.023" group="5" />
+          </body>
+        </body>
+      </body>
+      <body name="RR_hip" pos="-0.1881 -0.04675 0">
+        <inertial pos="0.0049166 0.00762615 -8.865e-05" quat="0.495027 0.482891 0.507341 0.514169" mass="0.68" diaginertia="0.000734064 0.000468438 0.000398719" />
+        <joint class="abduction" name="RR_hip_joint" />
+        <geom class="visual" quat="0 0 0 -1" mesh="hip" />
+        <geom class="hip_right1" />
+        <geom class="hip_right2" />
+        <geom class="hip_right3" />
+        <body name="RR_thigh" pos="0 -0.08 0">
+          <inertial pos="-0.00304722 0.019315 -0.0305004" quat="0.65243 -0.0272313 0.0775126 0.753383" mass="1.009" diaginertia="0.00478717 0.00460903 0.000709268" />
+          <joint class="hip" name="RR_thigh_joint" />
+          <geom class="visual" mesh="thigh_mirror" />
+          <geom class="thigh1" />
+          <geom class="thigh2" />
+          <geom class="thigh3" />
+          <body name="RR_calf" pos="0 0 -0.213">
+            <inertial pos="0.00429862 0.000976676 -0.146197" quat="0.691246 0.00357467 0.00511118 0.722592" mass="0.195862" diaginertia="0.00149767 0.00148468 3.58427e-05" />
+            <joint class="knee" name="RR_calf_joint" />
+            <geom class="visual" mesh="calf" />
+            <geom class="calf1" />
+            <geom class="calf2" />
+            <geom name="RR" class="foot" />
+            <site name="RR" pos="0 0 -0.213" type="sphere" size="0.023" group="5" />
+          </body>
+        </body>
+      </body>
+      <body name="RL_hip" pos="-0.1881 0.04675 0">
+        <inertial pos="0.0049166 -0.00762615 -8.865e-05" quat="0.514169 0.507341 0.482891 0.495027" mass="0.68" diaginertia="0.000734064 0.000468438 0.000398719" />
+        <joint class="abduction" name="RL_hip_joint" />
+        <geom class="visual" quat="0 0 1 0" mesh="hip" />
+        <geom class="hip_left1" />
+        <geom class="hip_left2" />
+        <geom class="hip_left3" />
+        <body name="RL_thigh" pos="0 0.08 0">
+          <inertial pos="-0.00304722 -0.019315 -0.0305004" quat="0.753383 0.0775126 -0.0272313 0.65243" mass="1.009" diaginertia="0.00478717 0.00460903 0.000709268" />
+          <joint class="hip" name="RL_thigh_joint" />
+          <geom class="visual" mesh="thigh" />
+          <geom class="thigh1" />
+          <geom class="thigh2" />
+          <geom class="thigh3" />
+          <body name="RL_calf" pos="0 0 -0.213">
+            <inertial pos="0.00429862 0.000976676 -0.146197" quat="0.691246 0.00357467 0.00511118 0.722592" mass="0.195862" diaginertia="0.00149767 0.00148468 3.58427e-05" />
+            <joint class="knee" name="RL_calf_joint" />
+            <geom class="visual" mesh="calf" />
+            <geom class="calf1" />
+            <geom class="calf2" />
+            <geom name="RL" class="foot" />
+            <site name="RL" pos="0 0 -0.213" type="sphere" size="0.023" group="5" />
+          </body>
+        </body>
+      </body>
+      <body name="dm_mount" pos="0 0 0" childclass="dm">
+        <inertial pos="0 0 0.075" mass="0.2" diaginertia="0.0003 0.0003 0.0005" />
+        <geom type="box" pos="0 0 0.075" size="0.09 0.065 0.025" rgba="0.25 0.25 0.25 1" />
+        <body name="dm_base_link" childclass="dm" pos="0 0 0.10">
+          <inertial mass="0.8366" pos="-7.849E-06 -1.1531E-06 0.029841" fullinertia="0.00133040 0.00213119 0.00275877 0.00000001 0.00000000 0.00000000" />
+          <geom type="mesh" mesh="dm_mesh_0" contype="0" conaffinity="0" group="2" density="0" rgba="0.878431 0.890196 0.874510 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+          <geom type="mesh" mesh="dm_mesh_1" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+          <geom type="mesh" mesh="dm_mesh_2" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+          <geom type="mesh" mesh="dm_mesh_3" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+          <body name="dm_link1" childclass="dm" pos="-8.416E-05 0 0.08465" quat="1.0 0.0 0.0 0.0">
+            <inertial mass="0.1613" pos="0.000113614552951627 -0.000616319527051323 0.0236476372671394" fullinertia="0.00025207 0.00015464 0.00023416 0.00000000 -0.00002832 0.00000000" />
+            <joint name="dm_joint1" type="hinge" axis="0 0 1" range="-2.8 2.8" />
+            <geom type="mesh" mesh="dm_mesh_4" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+            <geom type="mesh" mesh="dm_mesh_5" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+            <geom type="mesh" mesh="dm_mesh_6" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+            <geom type="mesh" mesh="dm_mesh_7" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+            <body name="dm_link2" childclass="dm" pos="0.020084 0.031625 0.05555" quat="0.7071054825112363 -0.7071080798594735 0.0 0.0">
+              <inertial mass="1.3266" pos="-0.13225622308888 -0.0030617036386309 -0.0308306967030205" fullinertia="0.00073374 0.01255987 0.01281387 -0.00000043 0.00000851 0.00000128" />
+              <joint name="dm_joint2" type="hinge" axis="0 0 -1" range="-3.14 0" />
+              <geom type="mesh" mesh="dm_mesh_8" contype="0" conaffinity="0" group="2" density="0" rgba="0.73 0.84 0.12 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+              <geom type="mesh" mesh="dm_mesh_9" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+              <geom type="mesh" mesh="dm_mesh_10" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+              <geom type="mesh" mesh="dm_mesh_11" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+              <geom type="mesh" mesh="dm_mesh_12" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+              <body name="dm_link3" childclass="dm" pos="-0.264 0 0" quat="1.0 0.0 0.0 0.0">
+                <inertial mass="0.8353" pos="0.121040035791843 -0.0536211076627949 -0.0310137854608077" fullinertia="0.00046807 0.00632695 0.00648221 -0.00003456 -0.00004260 0.00000006" />
+                <joint name="dm_joint3" type="hinge" axis="0 0 1" range="-3.14 0" />
+                <geom type="mesh" mesh="dm_mesh_13" contype="0" conaffinity="0" group="2" density="0" rgba="0.73 0.84 0.12 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                <geom type="mesh" mesh="dm_mesh_14" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                <geom type="mesh" mesh="dm_mesh_15" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                <geom type="mesh" mesh="dm_mesh_16" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                <geom type="mesh" mesh="dm_mesh_17" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                <body name="dm_link4" childclass="dm" pos="0.2426 -0.054 -0.001625" quat="1.0 0.0 0.0 0.0">
+                  <inertial mass="0.52" pos="0.0608200956293136 -0.0511711906613122 -0.030299458623927" fullinertia="0.00045986 0.00075258 0.00066742 0.00024219 -0.00000672 -0.00000535" />
+                  <joint name="dm_joint4" type="hinge" axis="0 0 1" range="-1.87 1.57" />
+                  <geom type="mesh" mesh="dm_mesh_18" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                  <geom type="mesh" mesh="dm_mesh_19" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                  <geom type="mesh" mesh="dm_mesh_20" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                  <geom type="mesh" mesh="dm_mesh_21" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                  <geom type="mesh" mesh="dm_mesh_22" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                  <body name="dm_link5" childclass="dm" pos="0.078308 -0.0375 -0.03" quat="0.7071054825112363 -0.7071080798594735 0.0 0.0">
+                    <inertial mass="0.383" pos="-0.00502802058982517 1.73866206692364E-06 0.0386233236326755" fullinertia="0.00019772 0.00021737 0.00017191 -0.00000062 -0.00002426 0.00000002" />
+                    <joint name="dm_joint5" type="hinge" axis="0 0 1" range="-1.57 1.57" />
+                    <geom type="mesh" mesh="dm_mesh_23" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                    <geom type="mesh" mesh="dm_mesh_24" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                    <geom type="mesh" mesh="dm_mesh_25" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                    <geom type="mesh" mesh="dm_mesh_26" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                    <body name="dm_link6" childclass="dm" pos="0.028008 0 0.04" quat="0.7071054825112363 0.0 0.7071080798594735 0.0">
+                      <inertial mass="0.3663" pos="3.76418727127126E-06 -0.000100908819946677 0.0253308606425965" fullinertia="0.00015554 0.00015554 0.00013966 -0.00000 -0.00000 -0.0000" />
+                      <joint name="dm_joint6" type="hinge" axis="0 0 1" range="-3.14 3.14" />
+                      <geom type="mesh" mesh="dm_mesh_27" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                      <geom type="mesh" mesh="dm_mesh_28" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                      <geom type="mesh" mesh="dm_mesh_29" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                      <body name="dm_end_link" childclass="dm" pos="0 0 0.15539" quat="3.27579306467916e-05 0.7071080791006858 -3.275805097361062e-05 0.7071054817524514">
+                        <inertial mass="0.44" pos="-0.0737654295815033 -9.5080995865868E-06 7.04327840286845E-06" fullinertia="0.00037354 0.00015830 0.00045353 -0.00000011 0.00000050 0.00000348" />
+                        <geom type="mesh" mesh="dm_mesh_30" contype="0" conaffinity="0" group="2" density="0" rgba="0.725 0.835 0.118 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                        <geom type="mesh" mesh="dm_mesh_31" contype="0" conaffinity="0" group="2" density="0" rgba="0.019608 0.027451 0.023529 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                        <geom type="mesh" mesh="dm_mesh_32" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                        <geom type="mesh" mesh="dm_mesh_33" group="3" density="0" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                        <site name="dm_tcp" pos="0 0 0" size="0.008" rgba="1 0 0 1" />
+                        <body name="dm_finger_left_link" childclass="dm" pos="0 0 0" quat="1.0 0.0 0.0 0.0">
+                          <inertial pos="0 0 0" mass="0.03" diaginertia="0.00002 0.00002 0.00002" />
+                          <joint name="dm_finger_left" type="slide" axis="0 1 0" range="0 0.05" />
+                          <geom type="mesh" mesh="dm_mesh_34" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_35" contype="0" conaffinity="0" group="2" density="0" rgba="0.239 0.278 0.271 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_36" contype="0" conaffinity="0" group="2" density="0" rgba="0.725 0.835 0.118 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_37" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_38" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_39" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_40" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_35" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_36" group="3" density="0" />
+                        </body>
+                        <body name="dm_finger_right_link" childclass="dm" pos="0 0 0" quat="1.0 0.0 0.0 0.0">
+                          <inertial pos="0 0 0" mass="0.03" diaginertia="0.00002 0.00002 0.00002" />
+                          <joint name="dm_finger_right" type="slide" axis="0 1 0" range="-0.05 0" />
+                          <geom type="mesh" mesh="dm_mesh_41" contype="0" conaffinity="0" group="2" density="0" rgba="0.066667 0.074510 0.070588 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_42" contype="0" conaffinity="0" group="2" density="0" rgba="0.239 0.278 0.271 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_43" contype="0" conaffinity="0" group="2" density="0" rgba="0.725 0.835 0.118 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_44" contype="0" conaffinity="0" group="2" density="0" rgba="0.831373 0.847059 0.831373 1" pos="0 0 0" quat="1.0 0.0 0.0 0.0" />
+                          <geom type="mesh" mesh="dm_mesh_45" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_46" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_47" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_42" group="3" density="0" />
+                          <geom type="mesh" mesh="dm_mesh_43" group="3" density="0" />
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <general class="abduction" name="FR_hip" joint="FR_hip_joint" />
+    <general class="hip" name="FR_thigh" joint="FR_thigh_joint" />
+    <general class="knee" name="FR_calf" joint="FR_calf_joint" />
+    <general class="abduction" name="FL_hip" joint="FL_hip_joint" />
+    <general class="hip" name="FL_thigh" joint="FL_thigh_joint" />
+    <general class="knee" name="FL_calf" joint="FL_calf_joint" />
+    <general class="abduction" name="RR_hip" joint="RR_hip_joint" />
+    <general class="hip" name="RR_thigh" joint="RR_thigh_joint" />
+    <general class="knee" name="RR_calf" joint="RR_calf_joint" />
+    <general class="abduction" name="RL_hip" joint="RL_hip_joint" />
+    <general class="hip" name="RL_thigh" joint="RL_thigh_joint" />
+    <general class="knee" name="RL_calf" joint="RL_calf_joint" />
+    <general name="dm_joint1" joint="dm_joint1" biastype="affine" gainprm="55" biasprm="0 -55 -3" ctrlrange="-2.8 2.8" forcerange="-27 27" />
+    <general name="dm_joint2" joint="dm_joint2" biastype="affine" gainprm="55" biasprm="0 -55 -3" ctrlrange="-3.14 0" forcerange="-27 27" />
+    <general name="dm_joint3" joint="dm_joint3" biastype="affine" gainprm="55" biasprm="0 -55 -3" ctrlrange="-3.14 0" forcerange="-27 27" />
+    <general name="dm_joint4" joint="dm_joint4" biastype="affine" gainprm="55" biasprm="0 -55 -3" ctrlrange="-1.87 1.57" forcerange="-7 7" />
+    <general name="dm_joint5" joint="dm_joint5" biastype="affine" gainprm="55" biasprm="0 -55 -3" ctrlrange="-1.57 1.57" forcerange="-7 7" />
+    <general name="dm_joint6" joint="dm_joint6" biastype="affine" gainprm="55" biasprm="0 -55 -3" ctrlrange="-3.14 3.14" forcerange="-7 7" />
+    <general name="dm_finger_left" joint="dm_finger_left" biastype="affine" gainprm="300" biasprm="0 -300 -5" ctrlrange="0 0.05" forcerange="-8 8" />
+  </actuator>
+  <sensor>
+    <framepos name="torso_pos" objtype="xbody" objname="trunk" />
+    <framequat name="torso_quat" objtype="xbody" objname="trunk" />
+    <jointpos name="pos_FR_hip_joint" joint="FR_hip_joint" />
+    <jointpos name="pos_FR_thigh_joint" joint="FR_thigh_joint" />
+    <jointpos name="pos_FR_calf_joint" joint="FR_calf_joint" />
+    <jointpos name="pos_FL_hip_joint" joint="FL_hip_joint" />
+    <jointpos name="pos_FL_thigh_joint" joint="FL_thigh_joint" />
+    <jointpos name="pos_FL_calf_joint" joint="FL_calf_joint" />
+    <jointpos name="pos_RR_hip_joint" joint="RR_hip_joint" />
+    <jointpos name="pos_RR_thigh_joint" joint="RR_thigh_joint" />
+    <jointpos name="pos_RR_calf_joint" joint="RR_calf_joint" />
+    <jointpos name="pos_RL_hip_joint" joint="RL_hip_joint" />
+    <jointpos name="pos_RL_thigh_joint" joint="RL_thigh_joint" />
+    <jointpos name="pos_RL_calf_joint" joint="RL_calf_joint" />
+  </sensor>
+  <keyframe>
+    <key name="home" qpos="0 0 0.28                 1 0 0 0                 0 0.9 -1.8                 0 0.9 -1.8                 0 0.9 -1.8                 0 0.9 -1.8 0 -1.57 -1.57 0 0 0 0.02 -0.02" ctrl="0 0.9 -1.8              0 0.9 -1.8              0 0.9 -1.8              0 0.9 -1.8 0 -1.57 -1.57 0 0 0 0.02" />
+    <key name="sit" qpos="0 0 0.08              1 0 0 0              0.073 1.34 -2.83              0.073 1.34 -2.83              0.073 1.34 -2.83              0.073 1.34 -2.83 0 -1.57 -1.57 0 0 0 0.02 -0.02" ctrl="0.073 1.34 -2.83              0.073 1.34 -2.83              0.073 1.34 -2.83              0.073 1.34 -2.83 0 -1.57 -1.57 0 0 0 0.02" />
+    <key name="tune" qpos="0 0 0.08              1 0 0 0              -0.1 1.34 -2.83              0.1 1.34 -2.83              -0.1 1.34 -2.83              0.1 1.34 -2.83 0 -1.57 -1.57 0 0 0 0.02 -0.02" ctrl="-0.1 1.34 -2.83              0.1 1.34 -2.83              -0.1 1.34 -2.83              0.1 1.34 -2.83 0 -1.57 -1.57 0 0 0 0.02" />
+  </keyframe>
+  <default>
+    <default class="dm">
+      <joint damping="0.15" armature="0.01" frictionloss="0.05" />
+      <geom friction="0.7 0.01 0.001" condim="3" margin="0.001" />
+    </default>
+  </default>
+  <asset>
+    <mesh name="dm_mesh_0" file="../rebot_dm/upstream/meshes/visual/colored_base_link_silver_trim.stl" />
+    <mesh name="dm_mesh_1" file="../rebot_dm/upstream/meshes/visual/colored_base_link_hardware_black.stl" />
+    <mesh name="dm_mesh_2" file="../rebot_dm/upstream/meshes/visual/colored_base_link_matte_black.stl" />
+    <mesh name="dm_mesh_3" file="../rebot_dm/upstream/meshes/collision/base_link.STL" />
+    <mesh name="dm_mesh_4" file="../rebot_dm/upstream/meshes/visual/colored_link1_matte_black.stl" />
+    <mesh name="dm_mesh_5" file="../rebot_dm/upstream/meshes/visual/colored_link1_hardware_black.stl" />
+    <mesh name="dm_mesh_6" file="../rebot_dm/upstream/meshes/visual/colored_link1_anodized_grey.stl" />
+    <mesh name="dm_mesh_7" file="../rebot_dm/upstream/meshes/collision/link1.STL" />
+    <mesh name="dm_mesh_8" file="../rebot_dm/upstream/meshes/visual/colored_link2_seeed_yellow.stl" />
+    <mesh name="dm_mesh_9" file="../rebot_dm/upstream/meshes/visual/colored_link2_matte_black.stl" />
+    <mesh name="dm_mesh_10" file="../rebot_dm/upstream/meshes/visual/colored_link2_hardware_black.stl" />
+    <mesh name="dm_mesh_11" file="../rebot_dm/upstream/meshes/visual/colored_link2_anodized_grey.stl" />
+    <mesh name="dm_mesh_12" file="../rebot_dm/upstream/meshes/collision/link2.STL" />
+    <mesh name="dm_mesh_13" file="../rebot_dm/upstream/meshes/visual/colored_link3_seeed_yellow.stl" />
+    <mesh name="dm_mesh_14" file="../rebot_dm/upstream/meshes/visual/colored_link3_matte_black.stl" />
+    <mesh name="dm_mesh_15" file="../rebot_dm/upstream/meshes/visual/colored_link3_hardware_black.stl" />
+    <mesh name="dm_mesh_16" file="../rebot_dm/upstream/meshes/visual/colored_link3_anodized_grey.stl" />
+    <mesh name="dm_mesh_17" file="../rebot_dm/upstream/meshes/collision/link3.STL" />
+    <mesh name="dm_mesh_18" file="../rebot_dm/upstream/meshes/visual/colored_link4_seeed_yellow.stl" />
+    <mesh name="dm_mesh_19" file="../rebot_dm/upstream/meshes/visual/colored_link4_matte_black.stl" />
+    <mesh name="dm_mesh_20" file="../rebot_dm/upstream/meshes/visual/colored_link4_hardware_black.stl" />
+    <mesh name="dm_mesh_21" file="../rebot_dm/upstream/meshes/visual/colored_link4_anodized_grey.stl" />
+    <mesh name="dm_mesh_22" file="../rebot_dm/upstream/meshes/collision/link4.STL" />
+    <mesh name="dm_mesh_23" file="../rebot_dm/upstream/meshes/visual/colored_link5_matte_black.stl" />
+    <mesh name="dm_mesh_24" file="../rebot_dm/upstream/meshes/visual/colored_link5_hardware_black.stl" />
+    <mesh name="dm_mesh_25" file="../rebot_dm/upstream/meshes/visual/colored_link5_anodized_grey.stl" />
+    <mesh name="dm_mesh_26" file="../rebot_dm/upstream/meshes/collision/link5.STL" />
+    <mesh name="dm_mesh_27" file="../rebot_dm/upstream/meshes/visual/colored_link6_matte_black.stl" />
+    <mesh name="dm_mesh_28" file="../rebot_dm/upstream/meshes/visual/colored_link6_hardware_black.stl" />
+    <mesh name="dm_mesh_29" file="../rebot_dm/upstream/meshes/collision/link6.STL" />
+    <mesh name="dm_mesh_30" file="../rebot_dm/upstream/meshes/visual/colored_gripper_base_seeed_yellow.stl" />
+    <mesh name="dm_mesh_31" file="../rebot_dm/upstream/meshes/visual/colored_gripper_base_hardware_black.stl" />
+    <mesh name="dm_mesh_32" file="../rebot_dm/upstream/meshes/visual/colored_gripper_base_metal.stl" />
+    <mesh name="dm_mesh_33" file="../rebot_dm/upstream/meshes/collision/gripper_base.stl" />
+    <mesh name="dm_mesh_34" file="../rebot_dm/upstream/meshes/visual/colored_left_finger_finger_black.stl" />
+    <mesh name="dm_mesh_35" file="../rebot_dm/upstream/meshes/shared/colored_left_finger_carriage_grey.stl" />
+    <mesh name="dm_mesh_36" file="../rebot_dm/upstream/meshes/shared/colored_left_finger_travel_stop_yellow.stl" />
+    <mesh name="dm_mesh_37" file="../rebot_dm/upstream/meshes/visual/colored_left_finger_rack_metal.stl" />
+    <mesh name="dm_mesh_38" file="../rebot_dm/upstream/meshes/mujoco_collision/left_finger_front.stl" />
+    <mesh name="dm_mesh_39" file="../rebot_dm/upstream/meshes/mujoco_collision/left_finger_mid.stl" />
+    <mesh name="dm_mesh_40" file="../rebot_dm/upstream/meshes/mujoco_collision/left_finger_rear.stl" />
+    <mesh name="dm_mesh_41" file="../rebot_dm/upstream/meshes/visual/colored_right_finger_finger_black.stl" />
+    <mesh name="dm_mesh_42" file="../rebot_dm/upstream/meshes/shared/colored_right_finger_carriage_grey.stl" />
+    <mesh name="dm_mesh_43" file="../rebot_dm/upstream/meshes/shared/colored_right_finger_travel_stop_yellow.stl" />
+    <mesh name="dm_mesh_44" file="../rebot_dm/upstream/meshes/visual/colored_right_finger_rack_metal.stl" />
+    <mesh name="dm_mesh_45" file="../rebot_dm/upstream/meshes/mujoco_collision/right_finger_front.stl" />
+    <mesh name="dm_mesh_46" file="../rebot_dm/upstream/meshes/mujoco_collision/right_finger_mid.stl" />
+    <mesh name="dm_mesh_47" file="../rebot_dm/upstream/meshes/mujoco_collision/right_finger_rear.stl" />
+  </asset>
+  <equality>
+    <joint joint1="dm_finger_right" joint2="dm_finger_left" polycoef="0 -1 0 0 0" />
+  </equality>
+  <contact>
+    <exclude body1="dm_end_link" body2="dm_finger_left_link" />
+    <exclude body1="dm_end_link" body2="dm_finger_right_link" />
+    <exclude body1="dm_link6" body2="dm_end_link" />
+    <exclude body1="dm_link5" body2="dm_link6" />
+    <exclude body1="dm_link4" body2="dm_link5" />
+    <exclude body1="dm_link3" body2="dm_link4" />
+    <exclude body1="dm_link2" body2="dm_link3" />
+    <exclude body1="dm_link1" body2="dm_link2" />
+    <exclude body1="dm_base_link" body2="dm_link1" />
+    <exclude body1="trunk" body2="dm_mount" />
+    <exclude body1="dm_mount" body2="dm_base_link" />
+    <exclude body1="dm_link4" body2="dm_link6" />
+  </contact>
+</mujoco>

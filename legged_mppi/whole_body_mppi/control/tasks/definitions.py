@@ -202,7 +202,46 @@ TASKS = {
         "config_path": 'configs/mppi_gait_config_climb_box_hw.yml',
         "sim_path": 'models/go1/go1_scene_mppi_pyr_climb_box_hw.xml'
     },
+    "ee_reach": {
+        "goal_pos": [[0, 0, 0.27]],
+        "default_orientation": DEFAULT_ORIENTATION,
+        "cmd_vel": [[0.0, 0.0]],
+        "goal_thresh": [0.2],
+        "desired_gait": ['in_place'],
+        "waiting_times": [0],
+        "ee_target": [0.45, 0.04, 0.78],
+        "arm_joint_ref": [0.0, -1.57, -1.57, 0.0, 0.0, 0.0],
+        "arm_velocity_ref": [0.0] * 6,
+        "ee_frame": "world",
+        "controller": "whole_body",
+        "required_robot": "go1_dm",
+        "required_rollout_model": "full",
+        "initial_key": "home",
+        "model_path": DEFAULT_MODEL_PATH,
+        "config_path": 'configs/mppi_ee_reach.yml',
+        "sim_path": DEFAULT_SIM_PATH
+    },
+    "ee_walk": {
+        "goal_pos": [[0, 0, 0.27], [1, 0, 0.27], [1, 0, 0.27]],
+        "default_orientation": DEFAULT_ORIENTATION,
+        "cmd_vel": [[0.0, 0.0], [0.2, 0.0], [0.0, 0.0]],
+        "goal_thresh": [0.2, 0.2, 0.2],
+        "desired_gait": ['in_place', 'walk_fast', 'in_place'],
+        "waiting_times": [0, 0, 0],
+        "ee_target": [0.45, 0.03, 0.55],
+        "arm_joint_ref": [0.0, -1.57, -1.57, 0.0, 0.0, 0.0],
+        "arm_velocity_ref": [0.0] * 6,
+        "ee_frame": "base",
+        "controller": "whole_body",
+        "required_robot": "go1_dm",
+        "required_rollout_model": "full",
+        "initial_key": "home",
+        "model_path": DEFAULT_MODEL_PATH,
+        "config_path": 'configs/mppi_ee_walk.yml',
+        "sim_path": DEFAULT_SIM_PATH
+    },
 }
+
 
 def get_task(task_name):
     """

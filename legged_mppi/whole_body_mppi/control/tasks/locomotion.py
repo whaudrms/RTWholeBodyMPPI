@@ -15,7 +15,7 @@ GAIT_WALK_PATH = str(GAIT_DIR / "MED/walking_gait_raibert_MED_0_1_10cm_100hz.tsv
 GAIT_WALK_FAST_PATH = str(GAIT_DIR / "FAST/walking_gait_raibert_FAST_0_1_10cm_100hz.tsv")
 
 class LocomotionController(LocomotionCost, BaseTaskController):
-    def __init__(self, task='stand') -> None:
+    def __init__(self, task='stand', robot='go1', rollout_model='full') -> None:
         """
         Initialize the MPPI controller with task-specific configurations.
 
@@ -25,6 +25,12 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         print("Task: ", task)
 
         # Retrieve task-specific parameters
+        if robot not in ('go1', 'go1_dm'):
+            raise ValueError(f'Unknown robot: {robot}')
+        if rollout_model not in ('simple', 'full'):
+            raise ValueError(f'Unknown rollout model: {rollout_model}')
+        self.rollout_model = rollout_model
+        self.robot = robot
         self.task = task
         self.task_data = get_task(task)
 
@@ -42,7 +48,14 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         MODEL_PATH = PACKAGE_ROOT / model_path
 
         # Initialize base MPPI
-        super().__init__(MODEL_PATH, CONFIG_PATH)
+        model = None
+        if robot == 'go1_dm':
+            from whole_body_mppi.models.go1_dm.rollout_model import load_runtime_model
+            model = load_runtime_model(MODEL_PATH, rollout_model)
+        super().__init__(MODEL_PATH, CONFIG_PATH, model=model)
+        if robot == 'go1_dm':
+            from whole_body_mppi.control.rollouts.mounted_arm import MountedArmRollout
+            self.rollout_func = MountedArmRollout(self.rollout_backend, self.h)
 
         params = self.params
         # Cost weights
@@ -101,7 +114,7 @@ class LocomotionController(LocomotionCost, BaseTaskController):
 
         elif self.goal_index == len(self.goal_pos) - 1 and not self.task_success and self.timer.done:
             # Final goal reached
-            print("Task succeeded.")
+            print("Locomotion task succeeded." if hasattr(self, "ee_objective") else "Task succeeded.")
             self.task_success = True
 
         else:
@@ -139,7 +152,16 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         if self.internal_ref:
             self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
 
-        return self.solve_task(obs)
+        action = self.solve_task(obs)
+        if self.robot == 'go1_dm' and self.act_dim == 12:
+            return self.rollout_func.expand_actions(action)
+        return action
 
     def task_cost(self, states, actions):
-        return self.cost_func(states[:, :, 1:], actions, self.joints_ref, self.body_ref)
+        if self.robot == 'go1_dm':
+            # FULLPHYSICS = time + qpos + qvel; omit both arm position and velocity.
+            nq = self.model.nq
+            states = states[:, :, np.r_[1:20, 1+nq:1+nq+18]]
+        else:
+            states = states[:, :, 1:]
+        return self.cost_func(states, actions, self.joints_ref, self.body_ref)
