@@ -1,0 +1,18 @@
+{
+  "task": "ee_walk",
+  "mode": "mppi",
+  "seeds": [
+    11,
+    22,
+    33,
+    44,
+    55
+  ],
+  "steps": 600,
+  "segments": 3,
+  "horizon_index": 0,
+  "ess_min": 20.0,
+  "ess_fraction": 0.2,
+  "output": "legged_mppi/analysis_results/leg_arm_ee_walk",
+  "report_only": false
+}

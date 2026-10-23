@@ -43,7 +43,18 @@ class WholeBodyEETests(unittest.TestCase):
                     agent.set_params(5, .1, 6)
                     data = mujoco.MjData(agent.model)
                     mujoco.mj_resetDataKeyframe(agent.model, data, 0)
+                    rollout = agent.rollout_func
+                    sampled_actions = []
+                    def record_rollout(states, actions, *args, **kwargs):
+                        sampled_actions.append(actions.copy())
+                        return rollout(states, actions, *args, **kwargs)
+                    agent.rollout_func = record_rollout
                     action = agent.update(np.r_[data.qpos, data.qvel])
+                    for candidates in sampled_actions:
+                        np.testing.assert_array_equal(candidates[..., 16:18], 0.)
+                    np.testing.assert_array_equal(action[16:18], 0.)
+                    np.testing.assert_array_equal(agent.selected_trajectory[..., 16:18], 0.)
+                    self.assertTrue(any(np.any(c[..., 12:16] != agent.sampling_init[12:16]) for c in sampled_actions))
                     self.assertEqual(agent.act_dim, 18)
                     self.assertEqual(action.shape, (18,))
                     self.assertEqual(agent.selected_trajectory.shape, (5, 18))
@@ -62,8 +73,8 @@ class WholeBodyEETests(unittest.TestCase):
 
     def test_ee_tasks_load_separate_configs(self):
         from whole_body_mppi.control.tasks.definitions import get_task
-        for task, frame, target in (('ee_reach', 'world', [.45,.04,.78]),
-                                    ('ee_walk', 'base', [.45,.03,.55])):
+        for task, frame, target in (('ee_reach', 'world', [.5,.2,.2]),
+                                    ('ee_walk', 'world', [.5,.2,.2])):
             agent = WholeBodyController(task=task)
             try:
                 self.assertEqual(agent.task, task)
@@ -104,6 +115,9 @@ class WholeBodyEETests(unittest.TestCase):
 
     def test_closed_loop_reduces_ee_error_with_leg_and_arm_control(self):
         agent = WholeBodyController(task='ee_reach')
+        # Keep the convergence fixture independent of editable demo waypoints.
+        agent.waypoints = np.array([[.45, .04, .78]])
+        agent.ee_objective.target = agent.waypoints[0].copy()
         try:
             apply_mppi_mode(agent, 'mpopi')
             from whole_body_mppi.interface.simulator import Simulator

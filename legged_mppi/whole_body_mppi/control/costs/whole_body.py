@@ -13,10 +13,12 @@ class WholeBodyCost:
         u = actions.reshape(-1, 18)
         gait = np.broadcast_to(joints_ref.T, (samples, steps, 24)).reshape(-1, 24)
         ref = np.empty_like(x)
-        ref[:, :7] = body_ref[:7]
+        body_ref = np.asarray(body_ref)
+        body = body_ref if body_ref.ndim == 1 else np.broadcast_to(body_ref, (samples, steps, 13)).reshape(-1, 13)
+        ref[:, :7] = body[..., :7]
         ref[:, 7:19] = gait[:, :12]
         ref[:, 19:25] = self.arm_joint_ref
-        ref[:, 25:31] = body_ref[7:]
+        ref[:, 25:31] = body[..., 7:]
         ref[:, 31:43] = gait[:, 12:]
         ref[:, 43:49] = self.arm_velocity_ref
         x[:, 25:28] = batch_world_to_local_velocity(x[:, 3:7], x[:, 25:28])
@@ -28,6 +30,16 @@ class WholeBodyCost:
         torque = np.empty_like(u)
         torque[:, :12] = 50 * (u[:, :12] - x[:, 7:19]) - 3 * x[:, 31:43]
         torque[:, 12:] = 55 * (u[:, 12:] - x[:, 19:25]) - 3 * x[:, 43:49]
-        cost = (np.einsum('bi,ij,bj->b', error, self.Q, error)
-                + np.einsum('bi,ij,bj->b', torque, self.R, torque) + position_cost)
+        # Q/R are configured as diagonal weights. Avoid dense quadratic forms
+        # for every rollout state; retain the general path for explicit matrices.
+        q_diag, r_diag = np.diag(self.Q), np.diag(self.R)
+        if np.count_nonzero(self.Q) == np.count_nonzero(q_diag):
+            state_cost = np.sum(error*error*q_diag, axis=1)
+        else:
+            state_cost = np.einsum('bi,ij,bj->b', error, self.Q, error)
+        if np.count_nonzero(self.R) == np.count_nonzero(r_diag):
+            torque_cost = np.sum(torque*torque*r_diag, axis=1)
+        else:
+            torque_cost = np.einsum('bi,ij,bj->b', torque, self.R, torque)
+        cost = state_cost + torque_cost + position_cost
         return cost.reshape(samples, steps).sum(axis=1)

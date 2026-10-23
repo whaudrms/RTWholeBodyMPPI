@@ -92,15 +92,15 @@ EE 제어는 별도 task로 선택합니다. 기존 stand/walk task는 다리 �
 
 | task | 동작 | config | EE 목표 |
 |---|---|---|---|
-| `ee_reach` | 정지 상태의 EE 도달 | `control/configs/mppi_ee_reach.yml` | world `(0.45, 0.04, 0.78)` m |
-| `ee_walk` | 보행 중 EE 상대 위치 추종 | `control/configs/mppi_ee_walk.yml` | base `(0.45, 0.03, 0.55)` m |
+| `ee_reach` | 정지 상태의 EE 도달 | `control/configs/mppi_ee_reach.yml` | world `(0.5, 0.2, 0.2)` m |
+| `ee_walk` | 보행 중 EE waypoint 추종 | `control/configs/mppi_ee_walk.yml` | world `(0.5, 0.2, 0.2)` m |
 
 ```bash
 python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach --mpopi
 python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_walk --mpopi
 ```
 
-`control/tasks/definitions.py`의 `TASKS`에서 각 task의 `ee_target`, `ee_frame`, `arm_joint_ref`, `arm_velocity_ref`을 수정합니다. config의 `whole_body` 블록에서는 weight, terminal_weight, arm_noise_sigma를 수정합니다. 각 파일은 기존 task와 동일하게 MPPI/gait 비용 설정도 포함합니다. EE 목표·가중치를 설정하는 CLI 옵션은 제공하지 않습니다.
+`control/tasks/definitions.py`의 `TASKS`에서 각 task의 `ee_waypoints`, `ee_frame`, `arm_joint_ref`, `arm_velocity_ref`을 수정합니다. config의 `whole_body` 블록에서는 weight, terminal_weight, arm_noise_sigma를 수정합니다. 각 파일은 기존 task와 동일하게 MPPI/gait 비용 설정도 포함합니다. EE 목표·가중치를 설정하는 CLI 옵션은 제공하지 않습니다.
 
 ```yaml
 whole_body:
@@ -120,3 +120,80 @@ EE task는 home standing으로 시작하고 기존 보행 task는 sit 초기화�
 Task/config 분리 후 전체 테스트 32개가 통과했습니다. `ee_walk --mpopi --headless --steps 1000` 실행에서 보행 목표 도달, EE 최종 오차 약 0.020 m (base frame), MuJoCo 경고 0개를 확인했습니다. 삭제한 EE CLI 옵션의 거부와 별도 config 로딩도 테스트합니다.
 
 EE config의 `Q_diag`는 qpos+qvel 순서의 49개 상태 가중치이며, 팔 관절각 6개(기본 1.0)와 각속도 6개(기본 0.1)를 포함합니다. `R_diag`는 다리 12개 + 팔 6개 토크 가중치입니다. 팔 토크 가중치 기본값은 각 0.001이며, 기존 `whole_body.arm_control_weight`를 대체합니다. 팔 기준 자세는 home 자세, 기준 각속도는 0입니다.
+
+### EE 속도 추종 task
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi --headless --steps 500
+```
+
+`ee_reach_cmd_vel`과 `ee_walk_cmd_vel`은 순수 속도 명령 task이다. `definitions.py`의 `command_phases`에 `duration`(초), `body_cmd_vel`(body XY, m/s), `ee_cmd_vel`(world XYZ, m/s), `gait`를 지정한다. 기본값은 1초 정지 → 4초 동작 → 정지이며 마지막 zero 명령은 계속 유지한다. reach 동작 구간은 body `[0, 0]`, EE `[0.05, 0, 0]`; walk 동작 구간은 body `[0.2, 0]`, EE `[0.2, 0, 0]`이다. EE 속도는 몸체 운동을 포함한 world 절대 속도이다.
+
+단계 전환은 sync/non-sync 모두 시뮬레이션 시간을 사용한다. 예측 horizon 안의 명령·gait 전환도 반영한다. Body/EE waypoint, 위치 오차 기반 속도 생성, EE 위치·종단 비용과 도착·holding 판정을 사용하지 않는다. Body XY 위치 가중치는 반드시 0이며 높이·자세·gait·관절 자세·토크·명령 변화 비용은 유지한다. 속도 0은 원래 위치로 복귀하는 위치 유지 명령이 아니다.
+
+각 YAML의 `whole_body.velocity_weight`는 EE 속도 비용이고 `action_delta_diag`는 다리12+팔6 명령 변화 비용이다. Body XY 속도 비용은 Q_diag의 index 25, 26(0-based)에서 관리한다. `whole_body.weight`, `terminal_weight`는 cmd_vel YAML에서 제거했다. `ee_tracking.png`에는 실제 위치와 실제/명령 속도를 표시하고 위치 목표선을 그리지 않는다. CSV/NPZ에는 `command_phase_indices` 또는 `command_phase_index`, 속도 명령과 오차를 기록하고 waypoint·holding·위치 목표/오차를 기록하지 않는다.
+
+### 팔 5·6번 관절 위치 유지
+
+모든 EE task의 `arm_fixed_joints: [5, 6]`은 1부터 시작하는 팔 관절 번호입니다. 고정 위치 명령은 같은 task의 `arm_joint_ref`에서 가져오며 기본값은 둘 다 0 rad입니다. MPPI 후보·최종 명령의 해당 축을 같은 하한/상한으로 제한하므로 다리12+팔1~4만 변하는 명령을 탐색합니다. 기존 Q49/R18 및 모델 차원은 유지합니다. 물리적 관절 잠금이 아니라 PD 위치 유지이므로 실제 관절각은 하중에 따라 소폭 달라질 수 있습니다. `arm_fixed_joints: []`로 바꾸면 팔 6축을 다시 탐색합니다.
+
+위치 task인 `ee_reach`, `ee_walk`은 `ee_waypoints`를 사용하며 기본값은 world 좌표 `[[0.5, 0.2, 0.2]]`입니다. 여러 좌표를 넣으면 순서대로 추종합니다. 공통 `ee_position_tolerance`, `ee_speed_tolerance`, `ee_settle_time`으로 도착을 판정하고 마지막 목표는 계속 유지합니다. EE waypoint와 기존 몸통 보행 단계는 독립적으로 진행합니다. 이 좌표는 사용자 지정 비교 목표이며 전 구간의 도달 가능성이나 지면 간섭 없는 동작을 보장하는 튜닝값은 아닙니다.
+
+### 계산 후 재생 및 결과 저장
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi --playback --no-plot
+```
+
+`--playback`은 viewer 없이 계산을 완료하고 결과를 저장한 뒤, 기록된 상태를 시뮬레이션 시간 기준으로 한 번 재생합니다. 재생 중 제어기 최적화·물리 step은 호출하지 않으며, 렌더링이 늦으면 프레임을 건너뜁니다. 상세 DM 메시를 사용합니다. `--headless`와 동시 사용은 불가합니다.
+
+모든 실행은 `whole_body_mppi/outputs/<제어기>/<task>/<UTC 실행시각>_<robot>/`에 저장됩니다. 제어기 플래그를 생략하면 폴더명은 `configured`입니다. `--headless` 또는 `--no-plot`에서도 저장은 수행하며 화면 표시만 생략합니다.
+
+- `trajectory.npz`: 시뮬레이션 시간, qpos/qvel, 적용 명령, 목표, tracking error, cost, 계산시간 등 원시 배열. 상태 배열은 `[차원, 기록시점]`입니다.
+- `metrics.csv`: 시간별 제어기 계산시간(ms), cost 평가시간(ms), horizon cost, 몸통 위치·속도 오차, EE 위치·속도 오차와 waypoint 상태.
+- `summary.json`: 총 실행시간, 제어기 계산시간 평균/p95/최대·합계, deadline 초과 비율, tracking error RMS/최대/최종 등.
+- `config.json`: task 정의, YAML 설정 및 실제 적용한 주요 solver 설정.
+- `metrics.png`: 계산시간·cost·tracking error·몸통 위치·관절 명령 plot.
+- `ee_tracking.png`: EE world xyz 목표/실제값 및 속도 명령/실제값(EE task).
+
+`solve_seconds`는 `agent.update`에 걸린 시간이며 렌더링, plot/파일 저장, 기록을 위한 추가 cost 평가는 제외합니다. `cost_seconds`에 추가 평가 시간을 별도로 기록합니다. `run_wall_seconds`는 시뮬레이션 루프 전체 시간이며 실시간 viewer를 사용하면 렌더링 시간도 포함합니다. cost는 각 주기에 선택한 예측 궤적의 누적 horizon 비용이며 실제 stage cost의 누적값이 아닙니다. 제어 갱신이 없는 기록시점에는 직전 cost를 유지하고 계산시간은 NaN으로 둡니다.
+
+### Rollout/비용 계산 최적화
+
+기존 MuJoCo 3.1.6을 유지하면서 CPU 작업을 작은 균등 묶음으로 나눠 분배하고, 단일 궤적 진단은 worker 제출 없이 직접 실행합니다. 대각 Q/R은 원소별 제곱합으로 계산하며 명시적인 비대각 행렬에는 기존 quadratic 계산을 사용합니다. `ee_reach_cmd_vel`은 EE 속도 비용에 batch 운동학을 한 번 계산합니다. 물리 timestep, 접촉 설정, 목표 비용, 샘플 수와 optimizer는 변경하지 않습니다.
+
+동일 입력 마이크로벤치마크:
+
+```bash
+python legged_mppi/scripts/benchmark_rollout.py --samples 128 --repeats 30 --output /tmp/rollout-benchmark
+```
+
+기존 실행 폴더와 비교하려면 `--reference /path/to/previous-benchmark`를 추가합니다. `benchmark.json`에 물리 rollout, 비용 평가, 전체 solve 시간 중앙값/p95를 기록하고, `reference.npz`에 동일성 비교용 상태·비용·명령을 저장합니다. 고정 관측에서 반복하는 벤치마크이며 실제 폐루프 추종 성능 실험과 구분해야 합니다.
+
+### 계산 지연과 실제 시간 동기화 실험
+
+```bash
+# 기존: 계산 동안 물리 정지, 계산 직후 첫 명령 적용
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi --headless --steps 2000
+
+# 지연 반영: 이전 계획을 실행하고, 새 계획은 관측 이후 지난 시간에 맞춰 적용
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi --sync --headless --steps 2000
+
+# 창으로 보려면 --headless 대신 --no-plot 사용
+```
+
+`--sync` 하나로 계산 지연 반영과 실제 시간 동기화를 함께 활성화한다. 옵션을 생략하면 계산 중 물리가 정지하는 기존 방식으로 실행한다. `--sync`는 시작 시각부터의 물리 시간에 맞춰 남는 시간만 대기하며, 늦으면 물리 스텝을 생략하지 않고 따라잡는다. 실제 하드웨어 주기를 보장하지 않으며 지연은 `sync_lag_ms`에 기록한다.
+
+지연 실험은 실제 병렬 스레드가 아니라 **측정 지연을 반영하는 직렬 에뮬레이션**이다. 관측으로부터 solve와 진단 cost 계산에 걸린 시간의 합을 물리 스텝 단위로 올림하여 새 계획 도착을 예약한다. 그동안 기존 계획의 시간별 명령을 실행한다. 최초 계획 전에는 현재 관절 위치를 유지하고, 계획 horizon을 넘기면 마지막 명령을 유지한다. 계산 중 새 관측으로 재계산하지 않으며 동시 pending 계획은 하나다. 다음 solve의 warm start와 gait는 지난 예측 스텝만큼 이동하고, EE waypoint 유지 시간과 cmd_vel 참조는 물리 주기마다 갱신한다. 전송 지연, 센서 지연, 병렬 CPU 경합은 포함하지 않는다.
+
+기존 폴더 구조에 그대로 저장하며 `config.json`의 `execution`과 `summary.json`에 모드를 기록한다. `metrics.csv`/`trajectory.npz`에 `plan_age`, `plan_application_delay`, `plan_exhausted`, `sync_lag`를 추가하고 `metrics.png`에 계획 지연을 표시한다. `ee_final_waypoint_last_5s_error_m`은 마지막 waypoint가 활성화된 마지막 5초 오차이며, **도달 또는 정착을 보장하는 holding 전용 통계는 아니다**. 짧은 실행은 접근 구간도 포함하므로 유지 성능 평가는 충분히 긴 동일 설정 실행으로 비교한다.
+
+
+### 보행 + EE 속도 추종 task
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_walk_cmd_vel --mpopi --sync
+```
+
+`ee_reach_cmd_vel`은 `mppi_ee_reach_cmd_vel.yml`, `ee_walk_cmd_vel`은 별도 `mppi_ee_walk_cmd_vel.yml`을 사용한다. 두 task는 위의 시간 기반 직접 속도 명령 구조를 공유한다. 팔 5·6 고정 명령을 유지하며 과거 실험 결과는 변경하지 않는다.

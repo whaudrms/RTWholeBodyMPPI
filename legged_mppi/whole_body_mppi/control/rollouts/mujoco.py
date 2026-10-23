@@ -1,5 +1,4 @@
 """Threaded MuJoCo batch rollouts, with private worker data."""
-import concurrent.futures
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -47,20 +46,28 @@ class MujocoRollout:
             num_workers (int): Number of parallel threads to use.
             nstep (int): Number of steps in each rollout.
         """
-        num_workers = min(num_workers, len(initial_state))
+        num_workers = min(num_workers, self.num_workers, len(initial_state))
         if num_workers == 0:
             return
-        n = len(initial_state) // num_workers
+        # The selected-plan diagnostic contains one rollout. Execute locally
+        # instead of submitting a single task and waiting on the worker pool.
+        if num_workers == 1:
+            if not hasattr(self.thread_local, 'data'):
+                self.thread_initializer()
+            self.call_rollout(initial_state, ctrl, state)
+            return
 
-        # Divide tasks into chunks for each worker
-        chunks = [(initial_state[i * n:(i + 1) * n], ctrl[i * n:(i + 1) * n], state[i * n:(i + 1) * n])
-                for i in range(num_workers - 1)]
-
-        # Add remaining chunk
-        chunks.append((initial_state[(num_workers - 1) * n:], ctrl[(num_workers - 1) * n:], state[(num_workers - 1) * n:]))
-
-        # Submit tasks to thread pool
-        futures = [self.executor.submit(self.call_rollout, *chunk) for chunk in chunks]
-        for future in concurrent.futures.as_completed(futures):
-            future.result()  # Ensure all threads complete execution
-
+        # Small, balanced chunks let the pool pick up more work when contact-
+        # heavy candidates take longer. Bound submission overhead to two chunks
+        # per worker and avoid creating extra chunks with fewer than four rows.
+        chunks = min(2*num_workers, max(num_workers, len(initial_state)//4))
+        quotient, remainder = divmod(len(initial_state), chunks)
+        futures = []
+        start = 0
+        for worker in range(chunks):
+            stop = start + quotient + (worker < remainder)
+            futures.append(self.executor.submit(self.call_rollout, initial_state[start:stop],
+                                                ctrl[start:stop], state[start:stop]))
+            start = stop
+        for future in futures:
+            future.result()

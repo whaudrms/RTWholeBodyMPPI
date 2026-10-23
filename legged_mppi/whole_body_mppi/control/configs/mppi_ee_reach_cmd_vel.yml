@@ -1,0 +1,118 @@
+# MPPI parameters (same configuration layout as locomotion tasks).
+dt: 0.01
+n_samples: 120
+n_iterations: 3
+beta_iteration: 0.5
+beta_horizon: 0.5
+lambda: 0.1
+horizon: 40
+n_workers: 5
+seed: 42
+o_solref:
+- 0.02
+- 1.0
+sample_type: cubic
+n_knots: 4
+noise_sigma:
+- 0.06
+- 0.1
+- 0.1
+- 0.06
+- 0.1
+- 0.1
+- 0.06
+- 0.1
+- 0.1
+- 0.06
+- 0.1
+- 0.1
+
+# ============================
+# Cost Function Parameters
+# ============================
+
+# Diagonal entries of the state cost matrix Q
+# Higher values penalize deviations from reference states more heavily.
+# Order: base pose(7), leg positions(12), arm positions(6),
+# base velocities(6), leg velocities(12), arm velocities(6).
+Q_diag:
+  - 0      # x-position: body velocity task
+  - 0      # y-position: body velocity task
+  - 500   # z-position (height)
+  - 400000 # Quaternion distance
+  - 0      # -
+  - 0      # -
+  - 0      # -
+  - 800    # Hip joint (FR)
+  - 800    # Thigh joint (FR)
+  - 800    # Calf joint (FR)
+  - 800    # Hip joint (FL)
+  - 800    # Thigh joint (FL)
+  - 800    # Calf joint (FL)
+  - 800    # Hip joint (RR)
+  - 800    # Thigh joint (RR)
+  - 800    # Calf joint (RR)
+  - 800    # Hip joint (RL)
+  - 800    # Thigh joint (RL)
+  - 800    # Calf joint (RL)
+  - 1.0    # Arm joint 1 position
+  - 1.0    # Arm joint 2 position
+  - 1.0    # Arm joint 3 position
+  - 1.0    # Arm joint 4 position
+  - 1.0    # Arm joint 5 position
+  - 1.0    # Arm joint 6 position
+  - 800    # x velocity: body cmd_vel tracking
+  - 800    # y velocity: body cmd_vel tracking
+  - 0.0001 # z velocity
+  - 0.0001 # Angular velocity (x)
+  - 0.0001 # Angular velocity (y)
+  - 0.0001 # Angular velocity (z)
+  - 0.1    # Hip joint velocity (FR)
+  - 0.1    # Thigh joint velocity (FR)
+  - 0.1    # Calf joint velocity (FR)
+  - 0.1    # Hip joint velocity (FL)
+  - 0.1    # Thigh joint velocity (FL)
+  - 0.1    # Calf joint velocity (FL)
+  - 0.1    # Hip joint velocity (RR)
+  - 0.1    # Thigh joint velocity (RR)
+  - 0.1    # Calf joint velocity (RR)
+  - 0.1    # Hip joint velocity (RL)
+  - 0.1    # Thigh joint velocity (RL)
+  - 0.1    # Calf joint velocity (RL)
+  - 0.1    # Arm joint 1 velocity
+  - 0.1    # Arm joint 2 velocity
+  - 0.1    # Arm joint 3 velocity
+  - 0.1    # Arm joint 4 velocity
+  - 0.1    # Arm joint 5 velocity
+  - 0.1    # Arm joint 6 velocity
+
+# ============================
+# Control Cost Matrix R
+# ============================
+# Penalizes excessive control effort (torque commands).
+R_diag:
+  - 0.001 # Hip joint (FR)
+  - 0.001 # Thigh joint (FR)
+  - 0.001 # Calf joint (FR)
+  - 0.001 # Hip joint (FL)
+  - 0.001 # Thigh joint (FL)
+  - 0.001 # Calf joint (FL)
+  - 0.001 # Hip joint (RR)
+  - 0.001 # Thigh joint (RR)
+  - 0.001 # Calf joint (RR)
+  - 0.001 # Hip joint (RL)
+  - 0.001 # Thigh joint (RL)
+  - 0.001 # Calf joint (RL)
+
+  - 0.001 # Arm joint 1 torque
+  - 0.001 # Arm joint 2 torque
+  - 0.001 # Arm joint 3 torque
+  - 0.001 # Arm joint 4 torque
+  - 0.001 # Arm joint 5 torque
+  - 0.001 # Arm joint 6 torque
+
+# Whole-body EE weights and sampling noise.
+whole_body:
+  arm_noise_sigma: [0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
+  velocity_weight: 2000.0
+  action_delta_diag: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]

@@ -60,3 +60,18 @@ class WholeBodyCostTests(unittest.TestCase):
         expected = old.calculate_total_cost(self.states[..., indices], self.actions[..., :12], self.gait, self.body)
         np.testing.assert_allclose(self.evaluate(), expected[0])
         np.testing.assert_array_equal(self.states, before)
+
+    def test_explicit_off_diagonal_costs_keep_dense_quadratic_semantics(self):
+        self.states[0, 1, 19:21] += [.2, .3]
+        self.cost.Q[19, 19] = 2
+        self.cost.Q[20, 20] = 3
+        self.cost.Q[19, 20] = self.cost.Q[20, 19] = .4
+        self.cost.R[12, 12] = .01
+        self.cost.R[13, 13] = .02
+        self.cost.R[12, 13] = self.cost.R[13, 12] = .003
+        errors = np.zeros((2, 49))
+        errors[1, 19:21] = [.2, .3]
+        torques = np.zeros((2, 18))
+        torques[:, 12:] = 55*(self.actions[0, :, 12:]-self.states[0, :, 19:25])-3*self.states[0, :, 43:49]
+        expected = sum(e@self.cost.Q@e + u@self.cost.R@u for e, u in zip(errors, torques))
+        self.assertAlmostEqual(self.evaluate(), expected)

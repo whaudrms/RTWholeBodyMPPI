@@ -44,3 +44,5 @@ build/
 
 # Ignore compiled C extensions
 *.so
+# Generated simulation reports
+legged_mppi/whole_body_mppi/outputs/

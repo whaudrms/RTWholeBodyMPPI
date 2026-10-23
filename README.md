@@ -81,7 +81,7 @@ docker ps
 ### Go1 + reBot B601-DM assembly
 
 A separate MuJoCo model and posture-hold preview are available: [model, assumptions, and commands](legged_mppi/whole_body_mppi/models/go1_dm/README.md). Run `python legged_mppi/scripts/preview_go1_dm.py` from the repository root. Run existing locomotion tasks with `python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task walk_straight --mpopi`. The optimizer controls the legs. `--rollout-model full` (default) retains the six-axis arm dynamics with primitive geometry; `simple` aggregates the arm at home into one rigid payload with preserved mass, center of mass and composite inertia. Prediction and simulation use the selected simplified DM representation at the Go1 timestep (10 ms, no substeps). The viewer displays the original detailed DM meshes, synchronized by kinematics without running detailed physics.
-Whole-body EE control uses dedicated tasks: `--robot go1_dm --task ee_reach --mpopi` for standing reach, or `--robot go1_dm --task ee_walk --mpopi` for walking with an EE target relative to the trunk. Set EE targets and frames in `control/tasks/definitions.py`; set planner parameters and cost weights in `control/configs/mppi_ee_reach.yml` or `mppi_ee_walk.yml` (under `legged_mppi/whole_body_mppi/`). Both require the full model. See the model documentation for scope and validation.
+Whole-body EE control uses dedicated tasks: `--robot go1_dm --task ee_reach --mpopi` for standing reach, or `--robot go1_dm --task ee_walk --mpopi` for walking with world-frame EE waypoints. Set EE targets and frames in `control/tasks/definitions.py`; set planner parameters and cost weights in `control/configs/mppi_ee_reach.yml` or `mppi_ee_walk.yml` (under `legged_mppi/whole_body_mppi/`). Both require the full model. See the model documentation for scope and validation.
 
 ### Locomotion tasks
 
@@ -445,3 +445,30 @@ If you find this code useful, please consider citing our paper:
         year={2025},
       }
 ```
+
+Pure EE velocity command tracking can be tested with:
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi
+```
+
+`ee_reach_cmd_vel` and `ee_walk_cmd_vel` track directly specified body-local XY and world EE XYZ velocity commands. Configure `command_phases` (duration in seconds, `body_cmd_vel`, `ee_cmd_vel`, `gait`) in `control/tasks/definitions.py`. Phase changes use simulation time in both sync and non-sync runs; the final zero command remains active. These tasks have no body/EE waypoint, position feedback, EE position cost, terminal position cost or arrival/holding condition. Body height/orientation, gait, joint posture, torque and action-change costs remain active. Zero velocity commands stop motion without returning to a previous position.
+
+Only the position tasks `ee_reach` and `ee_walk` use `ee_waypoints` and settling-based progression.
+
+Compute the full simulation before opening the viewer:
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi --playback --no-plot
+```
+
+Every run saves results to `legged_mppi/whole_body_mppi/outputs/<controller>/<task>/<UTC timestamp>_<robot>/`, including headless runs. Files: `summary.json` (timing/error statistics), `config.json` (task and solver settings), `metrics.csv`, `trajectory.npz`, `metrics.png`, and `ee_tracking.png` for EE tasks. Cost is the selected plan's predicted cumulative horizon objective, not the realized stage cost. Solver timing excludes diagnostic cost evaluation, rendering and report export; diagnostic evaluation time is stored separately. `--no-plot` suppresses plot windows while still saving PNGs. `--playback` renders recorded states without re-solving or stepping physics and cannot be combined with `--headless`.
+
+
+For simultaneous walking body velocity and EE velocity tracking:
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_walk_cmd_vel --mpopi --sync
+```
+
+The standing velocity task uses `mppi_ee_reach_cmd_vel.yml`; the walking velocity task uses `mppi_ee_walk_cmd_vel.yml`. Both start with one second at zero velocity, execute four seconds of commanded motion, then stop. Standing motion commands body `[0, 0]` and EE `[0.05, 0, 0]` m/s. Walking motion commands body `[0.2, 0]` and world EE `[0.2, 0, 0]` m/s. EE velocity is absolute world velocity including body motion, not velocity relative to the trunk. Frames are fixed explicitly in the task definition. Pure velocity tasks export velocity errors, command phase and actual EE positions without position targets or holding metrics. Existing historical outputs retain their original semantics.

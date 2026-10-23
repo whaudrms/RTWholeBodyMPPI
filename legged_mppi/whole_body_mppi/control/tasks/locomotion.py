@@ -34,14 +34,23 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         self.task = task
         self.task_data = get_task(task)
 
-        self.goal_pos = self.task_data['goal_pos']
-        self.goal_ori = self.task_data['default_orientation']
-        self.cmd_vel = self.task_data['cmd_vel']
-        self.goal_thresh = self.task_data['goal_thresh']
-        self.desired_gait = self.task_data['desired_gait']
+        velocity_task = self.task_data.get('control_mode') == 'cmd_vel'
+        if velocity_task:
+            phases = self.task_data['command_phases']
+            self.goal_pos = [[0., 0., self.task_data['body_height']]]
+            self.goal_ori = [self.task_data['body_orientation']]
+            self.cmd_vel = [phases[0]['body_cmd_vel']]
+            self.goal_thresh = []
+            self.desired_gait = [phases[0]['gait']]
+        else:
+            self.goal_pos = self.task_data['goal_pos']
+            self.goal_ori = self.task_data['default_orientation']
+            self.cmd_vel = self.task_data['cmd_vel']
+            self.goal_thresh = self.task_data['goal_thresh']
+            self.desired_gait = self.task_data['desired_gait']
         model_path = self.task_data['model_path']
         config_path = self.task_data['config_path']
-        waiting_times = self.task_data['waiting_times']
+        waiting_times = [0] if velocity_task else self.task_data['waiting_times']
 
         # Dynamically resolve paths for model and configuration files
         CONFIG_PATH = CONTROL_ROOT / config_path
