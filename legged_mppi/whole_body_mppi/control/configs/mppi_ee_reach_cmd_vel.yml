@@ -1,6 +1,14 @@
 # MPPI parameters (same configuration layout as locomotion tasks).
+cbf:
+  tilt_degrees: 10.0            # flat-ground body operating envelope
+  body_height_tolerance: 0.04    # body reference z +/- 4 cm
+  body_angular_speed_max: 2.0   # roll/pitch angular-speed norm [rad/s]
+  body_speed_max: 0.6             # body-frame XY norm [m/s]
+  ee_speed_max: 0.6               # world-frame XYZ norm [m/s]
+  body_velocity_error_max: 0.25   # XY command-error norm [m/s]
+  ee_velocity_error_max: 0.25     # XYZ command-error norm [m/s]
 dt: 0.01
-n_samples: 120
+n_samples: 10
 n_iterations: 3
 beta_iteration: 0.5
 beta_horizon: 0.5

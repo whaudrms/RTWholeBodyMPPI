@@ -29,7 +29,7 @@ class EEVelocityTaskTests(unittest.TestCase):
     def test_walk_tracks_body_and_ee_velocity_with_stand_walk_stop_phases(self):
         a = EEVelocityController('ee_walk_cmd_vel')
         self.addCleanup(a.shutdown)
-        a.set_params(5, .1, 6)
+        a.set_params(5, .1, max(6, 2*a.n_iterations))
         self.assertEqual(a.task_data['config_path'], 'configs/mppi_ee_walk_cmd_vel.yml')
         self.assertEqual(a.gait_scheduler.type, 'in_place')
         a.set_command_time(1.)

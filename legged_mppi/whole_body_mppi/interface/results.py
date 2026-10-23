@@ -39,6 +39,12 @@ def save_results(sim, controller, output_root=None):
     t = sim.time[:n]
     arrays = {name: getattr(sim, name)[..., :n] for name in (
         'time', 'qpos', 'qvel', 'ctrl', 'cost', 'solve_seconds', 'cost_seconds',
+        'cbf_margin', 'cbf_ee_margin', 'cbf_ee_radius', 'cbf_verified_residual', 'cbf_correction_norm', 'cbf_infeasible',
+        'cbf_extra_rollouts', 'cbf_shield_seconds',
+        'cbf_velocity_margins', 'cbf_body_speed', 'cbf_ee_speed',
+        'cbf_body_margin', 'cbf_leg_correction_norm', 'cbf_arm_correction_norm',
+        'cbf_body_guard_rejected', 'cbf_ee_correction_deferred',
+        'cbf_nominal_body_residual', 'cbf_verified_body_residual',
         'plan_age_seconds', 'plan_application_delay_seconds', 'sync_lag_seconds', 'plan_exhausted',
         'body_targets', 'body_velocity_commands', 'body_velocity_errors', 'body_position_errors',
         'ee_errors', 'ee_positions', 'ee_targets', 'ee_world_targets', 'ee_hold_status',
@@ -56,6 +62,21 @@ def save_results(sim, controller, output_root=None):
                    plan_application_delay_ms=sim.plan_application_delay_seconds[:n]*1000,
                    sync_lag_ms=sim.sync_lag_seconds[:n]*1000,
                    plan_exhausted=sim.plan_exhausted[:n].astype(int))
+    columns.update(cbf_margin=sim.cbf_margin[:n],
+                   cbf_ee_margin=sim.cbf_ee_margin[:n], cbf_ee_radius_m=sim.cbf_ee_radius[:n],
+                   cbf_verified_residual=sim.cbf_verified_residual[:n],
+                   cbf_correction_rad=sim.cbf_correction_norm[:n],
+                   cbf_infeasible=sim.cbf_infeasible[:n],
+                   cbf_extra_rollouts=sim.cbf_extra_rollouts[:n],
+                   cbf_shield_ms=sim.cbf_shield_seconds[:n]*1000)
+    velocity_margin_names = ('body_speed', 'ee_speed', 'body_velocity_error', 'ee_velocity_error')
+    columns.update({f'cbf_{name}_margin': sim.cbf_velocity_margins[i, :n]
+                    for i, name in enumerate(velocity_margin_names)})
+    columns.update(cbf_body_speed_m_s=sim.cbf_body_speed[:n], cbf_ee_speed_m_s=sim.cbf_ee_speed[:n])
+    for name in ('body_margin', 'leg_correction_norm', 'arm_correction_norm',
+                 'body_guard_rejected', 'ee_correction_deferred',
+                 'nominal_body_residual', 'verified_body_residual'):
+        columns[f'cbf_{name}'] = getattr(sim, f'cbf_{name}')[:n]
     if sim.velocity_task:
         columns.pop('body_position_error_m')
         columns['command_phase_index'] = sim.command_phase_indices[:n]
@@ -88,6 +109,43 @@ def save_results(sim, controller, output_root=None):
                    sync_lag_seconds=statistics(sim.sync_lag_seconds[:n]),
                    plan_exhausted_fraction=float(sim.plan_exhausted[:n].mean()),
                    latency_definition='Serial measured-latency emulation, not concurrent execution. Solve plus diagnostic cost evaluation rounded up to a physics step. Old plan executes until arrival; new plan indexed from observation time; exhausted plans hold last command.')
+    cbf = getattr(sim.agent, 'cbf', None)
+    margins = sim.cbf_margin[:n]
+    margins = margins[np.isfinite(margins)]
+    summary['cbf'] = dict(enabled=bool(cbf is not None and cbf.enabled),
+                          margin=statistics(sim.cbf_margin[:n]),
+                          ee_margin=statistics(sim.cbf_ee_margin[:n]),
+                          ee_radius_m=statistics(sim.cbf_ee_radius[:n]),
+                          minimum_margin=float(margins.min()) if len(margins) else None,
+                          margin_violation_fraction=float(np.mean(margins < 0)) if len(margins) else None,
+                          verified_residual=statistics(sim.cbf_verified_residual[:n]),
+                          correction_rad=statistics(sim.cbf_correction_norm[:n]),
+                          shield_seconds=statistics(sim.cbf_shield_seconds[:n]),
+                          extra_rollouts_total=int(np.nansum(sim.cbf_extra_rollouts[:n])),
+                          infeasible_solves=int(np.nansum(sim.cbf_infeasible[:n])),
+                          intervention_solves=int(np.sum(sim.cbf_correction_norm[:n] > 1e-8)),
+                          timing='Included in solve_seconds; extra_rollouts are additional to solver n_samples.',
+                          verification='At solve observation time only; sync-delayed execution is not re-certified.')
+    body_margin = sim.cbf_body_margin[:n]
+    body_margin = body_margin[np.isfinite(body_margin)]
+    summary['cbf']['body_priority'] = dict(
+        margin=statistics(body_margin),
+        minimum_margin=float(body_margin.min()) if len(body_margin) else None,
+        violation_fraction=float(np.mean(body_margin < 0)) if len(body_margin) else None,
+        nominal_residual=statistics(sim.cbf_nominal_body_residual[:n]),
+        verified_residual=statistics(sim.cbf_verified_body_residual[:n]),
+        leg_correction_rad=statistics(sim.cbf_leg_correction_norm[:n]),
+        arm_correction_rad=statistics(sim.cbf_arm_correction_norm[:n]),
+        rejected_solves=int(np.nansum(sim.cbf_body_guard_rejected[:n])),
+        ee_deferred_solves=int(np.nansum(sim.cbf_ee_correction_deferred[:n])))
+    summary['cbf']['velocity'] = dict(body_speed_m_s=statistics(sim.cbf_body_speed[:n]),
+                                     ee_speed_m_s=statistics(sim.cbf_ee_speed[:n]))
+    for i, name in enumerate(velocity_margin_names):
+        values = sim.cbf_velocity_margins[i, :n]
+        values = values[np.isfinite(values)]
+        summary['cbf']['velocity'][name] = dict(margin=statistics(values),
+                                                minimum_margin=float(values.min()) if len(values) else None,
+                                                violation_fraction=float(np.mean(values < 0)) if len(values) else None)
     if sim.velocity_task:
         summary.pop('body_position_error_m')
         summary.update(control_mode='cmd_vel', body_velocity_frame='body', ee_velocity_frame='world',
@@ -104,7 +162,7 @@ def save_results(sim, controller, output_root=None):
         summary['ee_velocity_error_m_s'] = statistics(columns['ee_velocity_error_m_s'])
     (folder / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False), encoding='utf-8')
     config = dict(task=sim.agent.task_data, parameters=sim.agent.params,
-                  execution=dict(sync=sim.sync),
+                  execution=dict(sync=sim.sync, cbf=cbf.configuration() if cbf is not None else dict(enabled=False)),
                   rollout_model=getattr(sim.agent, 'rollout_model', None),
                   effective_solver=dict(n_samples=sim.agent.n_samples, n_iterations=sim.agent.n_iterations,
                                         horizon=sim.agent.horizon, temperature=sim.agent.temperature,
@@ -148,7 +206,7 @@ def save_results(sim, controller, output_root=None):
     for axis in ax.flat:
         axis.set_xlabel('Simulation time (s)')
         axis.grid(alpha=.25)
-    fig.suptitle(f'{controller} / {sim.agent.task} / {sim.robot}')
+    fig.suptitle(f'{controller} / {sim.agent.task} / {sim.robot} / CBF {"on" if cbf is not None and cbf.enabled else "off"}')
     fig.savefig(folder / 'metrics.png', dpi=150)
     if sim.ee_errors is not None:
         ee = Figure(figsize=(12, 7), constrained_layout=True)

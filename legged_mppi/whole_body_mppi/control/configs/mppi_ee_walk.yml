@@ -1,6 +1,6 @@
 # MPPI parameters (same configuration layout as locomotion tasks).
 dt: 0.01
-n_samples: 120
+n_samples: 30
 n_iterations: 3
 beta_iteration: 0.5
 beta_horizon: 0.5

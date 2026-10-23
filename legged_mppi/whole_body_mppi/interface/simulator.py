@@ -105,6 +105,21 @@ class Simulator:
         self.body_velocity_errors = np.zeros((2, self.T))
         self.body_position_errors = np.zeros(self.T)
         self.solve_seconds = np.full(self.T, np.nan)
+        self.cbf_margin = np.full(self.T, np.nan)
+        self.cbf_ee_margin = np.full(self.T, np.nan)
+        self.cbf_ee_radius = np.full(self.T, np.nan)
+        self.cbf_velocity_margins = np.full((4, self.T), np.nan)
+        self.cbf_body_speed = np.full(self.T, np.nan)
+        self.cbf_ee_speed = np.full(self.T, np.nan)
+        for name in ('body_margin', 'leg_correction_norm', 'arm_correction_norm',
+                     'body_guard_rejected', 'ee_correction_deferred',
+                     'nominal_body_residual', 'verified_body_residual'):
+            setattr(self, f'cbf_{name}', np.full(self.T, np.nan))
+        self.cbf_verified_residual = np.full(self.T, np.nan)
+        self.cbf_correction_norm = np.full(self.T, np.nan)
+        self.cbf_infeasible = np.full(self.T, np.nan)
+        self.cbf_extra_rollouts = np.full(self.T, np.nan)
+        self.cbf_shield_seconds = np.full(self.T, np.nan)
         self.cost_seconds = np.full(self.T, np.nan)
         self.plan_age_seconds = np.full(self.T, np.nan)
         self.plan_application_delay_seconds = np.full(self.T, np.nan)
@@ -143,6 +158,20 @@ class Simulator:
         self.qvel[:, t] = self.data.qvel
         self.ctrl[:, t] = self.data.ctrl
         self.time[t] = self.data.time
+        cbf = getattr(self.agent, 'cbf', None)
+        if cbf is not None:
+            observation = np.r_[self.data.qpos, self.data.qvel]
+            cbf.observe(observation, self.data.time)
+            h, b = cbf.barriers(observation)
+            self.cbf_margin[t] = min(float(h.min()), float(b.min()))
+            if hasattr(cbf, 'barrier_groups'):
+                body = cbf.barrier_groups == 0
+                self.cbf_body_margin[t] = min(float(h[body].min()), float(b[body].min()))
+            if cbf.ee_enabled:
+                self.cbf_ee_margin[t] = min(float(h[-1]), float(b[-1]))
+                self.cbf_ee_radius[t] = cbf.ee_envelope()[0]
+            if cbf.velocity_enabled:
+                self.cbf_velocity_margins[:, t] = h[-4:]
         if self.ee_errors is not None:
             objective = self.agent.ee_objective
             position = objective.positions(self.data.qpos)
@@ -168,6 +197,9 @@ class Simulator:
             local_velocity = quaternion_matrix(self.data.qpos[3:7]).T @ self.data.qvel[:3]
             self.body_velocity_errors[:, t] = local_velocity[:2]-self.agent.body_ref[7:9]
             self.body_position_errors[t] = np.linalg.norm(self.data.qpos[:3]-self.agent.body_ref[:3])
+            if cbf is not None and cbf.velocity_enabled:
+                self.cbf_body_speed[t] = np.linalg.norm(local_velocity[:2])
+                self.cbf_ee_speed[t] = np.linalg.norm(self.ee_velocities[:, t])
         if self.velocity_task:
             self.body_position_errors[t] = np.nan
         self.cost[0, t] = self.latest_plan_cost
@@ -260,6 +292,17 @@ class Simulator:
                     solve_started = wall_time.perf_counter()
                     candidate = self.agent.update(np.concatenate([self.data.qpos, self.data.qvel], axis=0))
                     self.solve_seconds[t] = wall_time.perf_counter()-solve_started
+                    cbf = getattr(self.agent, 'cbf', None)
+                    if cbf is not None and cbf.enabled:
+                        self.cbf_verified_residual[t] = cbf.last['verified_min_residual']
+                        self.cbf_correction_norm[t] = cbf.last['correction_norm']
+                        self.cbf_infeasible[t] = float(cbf.last['infeasible'])
+                        self.cbf_extra_rollouts[t] = cbf.last['extra_rollouts']
+                        self.cbf_shield_seconds[t] = cbf.last['shield_seconds']
+                        for name in ('leg_correction_norm', 'arm_correction_norm',
+                                     'body_guard_rejected', 'ee_correction_deferred',
+                                     'nominal_body_residual', 'verified_body_residual'):
+                            getattr(self, f'cbf_{name}')[t] = cbf.last.get(name, np.nan)
                     cost_started = wall_time.perf_counter()
                     plan_cost = float(self.agent.eval_best_trajectory())
                     self.cost_seconds[t] = wall_time.perf_counter()-cost_started

@@ -73,7 +73,7 @@ class SimulationLatencyTests(unittest.TestCase):
             with self.subTest(sync=sync):
                 agent = EEVelocityController('ee_walk_cmd_vel')
                 self.addCleanup(agent.shutdown)
-                agent.set_params(5, .1, 6)
+                agent.set_params(5, .1, max(6, 2*agent.n_iterations))
                 agent.phase_ends = np.array([.01, .02, .03])
                 sim = Simulator(agent=agent, viewer=False, T=9, robot='go1_dm', initial_key='home',
                                 model_path=PACKAGE_ROOT/agent.task_data['sim_path'], sync=sync)

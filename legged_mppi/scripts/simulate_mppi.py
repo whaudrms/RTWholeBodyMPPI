@@ -12,13 +12,14 @@ from whole_body_mppi.control.tasks.locomotion import LocomotionController
 from whole_body_mppi.control.tasks.base import PACKAGE_ROOT
 from whole_body_mppi.control.tasks.definitions import get_task
 from whole_body_mppi.control.solvers.options import add_mppi_mode_arguments, apply_mppi_mode
+from whole_body_mppi.control.safety.cbf import configure_cbf
 
 VALID_TASKS = ['stairs', 'stand', 'walk_octagon', 'walk_straight', 'big_box',
                'walk_octagon_hw', 'walk_straight_hw', 'stand_hw', 'climb_box_hw',
                'ee_reach', 'ee_walk', 'ee_reach_cmd_vel', 'ee_walk_cmd_vel']
 
 
-def main(task, mppi_mode=None, robot='go1', *, headless=False, steps=2000, plot=True, rollout_model='full', playback=False, sync=False):
+def main(task, mppi_mode=None, robot='go1', *, headless=False, steps=2000, plot=True, rollout_model='full', playback=False, sync=False, cbf='off'):
     """steps counts 10 ms control periods for either robot."""
     if playback and headless:
         raise ValueError('--playback cannot be combined with --headless')
@@ -34,6 +35,7 @@ def main(task, mppi_mode=None, robot='go1', *, headless=False, steps=2000, plot=
             agent = WholeBodyController(task, robot, rollout_model)
     try:
         apply_mppi_mode(agent, mppi_mode)
+        configure_cbf(agent, cbf)
         simulator = Simulator(
             agent=agent, viewer=not (headless or playback), T=steps + 1,
             dt=0.01, timeconst=0.02, dampingratio=1.0,
@@ -44,7 +46,7 @@ def main(task, mppi_mode=None, robot='go1', *, headless=False, steps=2000, plot=
             print(f'EE initial error: {initial_error:.4f} m')
         simulator.run()
         progress = f'command_phase={agent.command_phase_index}' if hasattr(agent, 'command_phase_index') else f'goal={agent.goal_index}'
-        print(f'robot={robot}, mode={mppi_mode or "configured"}, '
+        print(f'robot={robot}, mode={mppi_mode or "configured"}, cbf={cbf}, '
               f't={simulator.data.time:.2f}s, base={simulator.data.qpos[:3]}, '
               f'{progress}, warnings={simulator.data.warning.number.sum()}')
         if hasattr(agent, 'ee_objective'):
@@ -74,6 +76,8 @@ def parse_args():
     parser.add_argument('--rollout-model', choices=('simple', 'full'), default='full',
                         help='DM physics/rollout model: simple=rigid payload, full=6-axis primitive arm (default); display always uses detailed meshes.')
     parser.add_argument('--task', required=True, choices=VALID_TASKS)
+    parser.add_argument('--cbf', choices=('on', 'off'), default='off',
+                        help='Enable DCBF costs and predictive input filtering; cmd_vel also constrains body/EE velocity (default: off).')
     parser.add_argument('--sync', action='store_true', help='Emulate measured control latency and pace simulation against wall time; execute the previous plan while waiting for a new plan.')
     parser.add_argument('--playback', action='store_true', help='Compute without a viewer, save results, then replay recorded states at simulation speed.')
     parser.add_argument('--headless', action='store_true', help='Disable viewer and plot windows; numeric results and PNG reports are still saved.')
@@ -95,4 +99,4 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
     main(args.task, args.mppi_mode, args.robot,
-         rollout_model=args.rollout_model, playback=args.playback, sync=args.sync, headless=args.headless, steps=args.steps, plot=not (args.headless or args.no_plot))
+         rollout_model=args.rollout_model, playback=args.playback, sync=args.sync, headless=args.headless, steps=args.steps, plot=not (args.headless or args.no_plot), cbf=args.cbf)

@@ -26,14 +26,26 @@ class BaseTaskController(MPPISolver):
             action_min=[-0.863, -0.686, -2.818] * 4,
             action_max=[0.863, 4.501, -0.888] * 4)
         self.cost_func = self.calculate_total_cost
+        self.cbf = None
 
     def task_cost(self, states, actions):
         """Interpret rollout state layout and evaluate the task objective."""
         raise NotImplementedError
 
     def solve_task(self, obs):
+        if self.cbf is not None:
+            self.cbf.prepare_reference(obs)
+        def objective(actions):
+            # Compute barriers before legacy costs can rotate velocity in-place.
+            penalty = (self.cbf.penalty(self.state_rollouts, obs)
+                       if self.cbf is not None and self.cbf.enabled else 0.)
+            return self.task_cost(self.state_rollouts, actions) + penalty
         actions = self.optimize_actions(
-            obs, lambda actions: self.task_cost(self.state_rollouts, actions))
+            obs, objective)
+        if self.cbf is not None and self.cbf.enabled:
+            actions = self.cbf.filter_plan(actions, obs)
+        if self.cbf is not None and not self.cbf.external_clock:
+            self.cbf.time += self.h
         self.gait_scheduler.roll()
         return self.commit_plan(actions)
 

@@ -236,6 +236,11 @@ Run MPOPI with `PYTHONPATH=legged_mppi python legged_mppi/scripts/simulate_mppi.
 See [MPOPI settings and behavior](legged_mppi/docs/mpopi.md).
 Use `--mbd` for model-based diffusion; see [MBD settings and behavior](legged_mppi/docs/mbd.md).
 
+Waypoint and command-velocity tasks support `--cbf on|off` (default: `off`) for an
+experimental DCBF cost and predictive input filter on Go1 and Go1-DM. Command-velocity
+tasks add body-local XY / world EE XYZ speed and command-error limits without position goals.
+See [CBF comparison commands, diagnostics, and limitations](legged_mppi/docs/cbf_mppi.md).
+
 ## Definitions
 Tasks are defined in the `legged_mppi/whole_body_mppi/control/tasks/definitions.py` file. This file contains the descrition of every task as a dictionary containing the following variables:
 
