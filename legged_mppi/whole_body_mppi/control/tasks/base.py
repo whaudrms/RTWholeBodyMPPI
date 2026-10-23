@@ -32,13 +32,27 @@ class BaseTaskController(MPPISolver):
         raise NotImplementedError
 
     def solve_task(self, obs):
-        actions = self.optimize_actions(
-            obs, lambda actions: self.task_cost(self.state_rollouts, actions))
+        shield = getattr(self, 'shield', None)
+        def evaluate(actions):
+            # Evaluate barriers before any legacy cost can modify rollout states.
+            safety_cost = shield.cost(obs, self.state_rollouts) if shield is not None else 0
+            return self.task_cost(self.state_rollouts, actions) + safety_cost
+        actions = self.optimize_actions(obs, evaluate)
+        nominal = actions.copy() if shield is not None else None
+        if shield is not None:
+            actions = shield.repair(obs, actions)
+        if getattr(self, 'qp_filter', None) is not None:
+            actions = self.qp_filter.repair(obs, actions)
         self.gait_scheduler.roll()
-        return self.commit_plan(actions)
+        command = self.commit_plan(actions)
+        if shield is not None:
+            # Algorithm 2 retains nominal MPPI controls for the next warm start.
+            self.trajectory = np.roll(nominal, -1, axis=0)
+            self.trajectory[-1] = nominal[-1]
+        return command
 
     def eval_best_trajectory(self):
-        if self.obs is None:
+        if self.obs is None or self.selected_trajectory is None:
             return None
         states = np.zeros((1, self.horizon,
                            mujoco.mj_stateSize(self.model, mujoco.mjtState.mjSTATE_FULLPHYSICS.value)))

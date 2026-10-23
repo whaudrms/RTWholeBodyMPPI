@@ -34,6 +34,10 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         self.task = task
         self.task_data = get_task(task)
 
+        self.velocity_tracking = self.task_data.get('tracking_mode') == 'cmd_vel'
+        if self.velocity_tracking and robot != 'go1':
+            raise ValueError('walk_straight_cmd_vel currently supports Go1 only')
+
         self.goal_pos = self.task_data['goal_pos']
         self.goal_ori = self.task_data['default_orientation']
         self.cmd_vel = self.task_data['cmd_vel']
@@ -83,11 +87,18 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         self.goal_index = 0
         self.body_ref = np.concatenate((self.goal_pos[self.goal_index],
                                         self.goal_ori[self.goal_index],
-                                        self.cmd_vel[self.goal_index],
+                                        self.cmd_vel[self.goal_index][:2],
                                         np.zeros(4)))
 
         self.gait_scheduler = self.gaits[self.desired_gait[self.goal_index]]
         self.task_success = False
+        if self.velocity_tracking:
+            self.command_target = np.asarray(self.cmd_vel[0], dtype=float).copy()
+            self.command_velocity = np.zeros(3)
+            self.command_acceleration = np.asarray(self.task_data['command_acceleration'], dtype=float)
+            self.body_ref[7:9] = 0
+            self.Q[:2, :] = 0
+            self.Q[:, :2] = 0
 
         # Debug information
         print(f"Initial goal {self.goal_index}: {self.goal_pos[self.goal_index] }")
@@ -98,6 +109,8 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         Progress to the next goal based on the task sequence.
         Updates the internal reference trajectory and gait scheduler.
         """
+        if self.velocity_tracking:
+            return  # Continuous task; proximity never completes or changes the command.
         self.timer.increment()
 
         if self.goal_index < len(self.goal_pos) - 1 and self.timer.done:
@@ -126,6 +139,15 @@ class LocomotionController(LocomotionCost, BaseTaskController):
             elif self.desired_gait[self.goal_index] in ['trot']:
                 self.noise_sigma = np.array([0.06, 0.2, 0.2] * 4)
 
+    def set_cmd_vel(self, vx, vy, yaw_rate):
+        """Set heading-frame m/s and Euler yaw rate in rad/s (rate limited on update)."""
+        if not self.velocity_tracking:
+            raise ValueError('set_cmd_vel requires a cmd_vel tracking task')
+        command = np.asarray([vx, vy, yaw_rate], dtype=float)
+        if not np.isfinite(command).all():
+            raise ValueError('cmd_vel must be finite')
+        self.command_target = command
+
     def update(self, obs):
         """
         Update the MPPI controller based on the current observation.
@@ -136,6 +158,15 @@ class LocomotionController(LocomotionCost, BaseTaskController):
             np.ndarray: Selected action based on the optimal trajectory.
         """
         self.obs = obs
+
+        if self.velocity_tracking:
+            limit = self.command_acceleration * self.h
+            self.command_velocity += np.clip(self.command_target - self.command_velocity, -limit, limit)
+            self.body_ref[7:9] = self.command_velocity[:2]
+            self.body_ref[12] = self.command_velocity[2]
+            if self.internal_ref:
+                self.joints_ref = self.gait_scheduler.gait[:, self.gait_scheduler.indices[:self.horizon]]
+            return self.solve_task(obs)
 
         # Calculate the direction and distance to the goal
         direction = self.body_ref[:3] - obs[:3]
@@ -158,6 +189,9 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         return action
 
     def task_cost(self, states, actions):
+        if self.velocity_tracking:
+            from whole_body_mppi.control.costs.cmd_vel import command_velocity_cost
+            return command_velocity_cost(self, states, actions)
         if self.robot == 'go1_dm':
             # FULLPHYSICS = time + qpos + qvel; omit both arm position and velocity.
             nq = self.model.nq

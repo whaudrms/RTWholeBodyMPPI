@@ -20,6 +20,20 @@ DEFAULT_ORIENTATION = [[1, 0, 0, 0]]
 
 
 TASKS = {
+    "walk_straight_cmd_vel": {
+        "tracking_mode": "cmd_vel",
+        "required_robot": "go1",
+        "goal_pos": [[0, 0, 0.27]],  # Only height is used; no waypoint.
+        "default_orientation": DEFAULT_ORIENTATION,
+        "cmd_vel": [[0.5, 0.0, 0.0]],  # Heading-frame vx, vy, Euler yaw rate.
+        "command_acceleration": [0.5, 0.5, 1.0],
+        "goal_thresh": [0.2],
+        "desired_gait": ["walk_fast"],
+        "waiting_times": [0],
+        "model_path": DEFAULT_MODEL_PATH,
+        "config_path": "configs/mppi_cmd_vel.yml",
+        "sim_path": DEFAULT_SIM_PATH,
+    },
     "walk_straight": {
         "goal_pos": [[0, 0, 0.27],
                      [1, 0, 0.27],

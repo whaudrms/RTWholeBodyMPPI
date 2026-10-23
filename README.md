@@ -85,6 +85,8 @@ Whole-body EE control uses dedicated tasks: `--robot go1_dm --task ee_reach --mp
 
 ### Locomotion tasks
 
+Go1 command-velocity tracking: `python legged_mppi/scripts/simulate_mppi.py --task walk_straight_cmd_vel --mpopi`. This continuous task tracks heading-frame forward/lateral velocity and yaw rate without position waypoints. See [command task settings and behavior](legged_mppi/docs/cmd_vel.md).
+
 <center>
 
 | **Walk Straight Task**                            | **Walk Octagon Task**                    |

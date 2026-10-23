@@ -1,10 +1,13 @@
 import mujoco
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import tqdm
 from PIL import Image
+from whole_body_mppi.control.safety.errors import FilterFailure
 
 class Simulator:
     """
@@ -35,7 +38,7 @@ class Simulator:
                 T = 200, dt = 0.01, viewer = True, gravity = True,
                 # stiff=False
                 timeconst=0.02, dampingratio=1.0, ctrl_rate=100,
-                save_dir="./frames", save_frames=False, robot="go1", initial_key=1, model_variant="full"
+                save_dir="./frames", save_frames=False, robot="go1", initial_key="home", model_variant="full"
                 ):
         # filter
 
@@ -59,6 +62,7 @@ class Simulator:
         # data
         self.data = mujoco.MjData(self.model)
         self.T = T
+        self.initial_key = initial_key
         # save
         self.save_frames = save_frames
         self.save_dir = save_dir
@@ -67,6 +71,12 @@ class Simulator:
         key_id = self.model.key(initial_key).id if isinstance(initial_key, str) else initial_key
         mujoco.mj_resetDataKeyframe(self.model, self.data, key_id)
         mujoco.mj_forward(self.model, self.data)
+        # Align the nominal plan with the selected starting pose, rather than
+        # requesting the legacy seated posture on the first optimization cycle.
+        if agent is not None:
+            agent.sampling_init = np.clip(self.data.ctrl[:agent.act_dim],
+                                          agent.act_min, agent.act_max).copy()
+            agent.reset_planner()
 
         # The display model is independent of rollout/physics complexity.
         self.robot = robot
@@ -86,6 +96,9 @@ class Simulator:
         self.qvel = np.zeros((self.model.nv, self.T))
         self.ctrl = np.zeros((self.model.nu, self.T))
         self.time = np.zeros(self.T)
+        self.recorded_steps = 0
+        self.command_history = np.zeros((self.T, 3)) if getattr(agent, 'velocity_tracking', False) else None
+        self.command_target_history = np.zeros((self.T, 3)) if self.command_history is not None else None
         self.cost = np.zeros((1, self.T))
         self.ee_errors = np.zeros(self.T) if hasattr(agent, 'ee_objective') else None
         self.ee_positions = np.zeros((3, self.T)) if self.ee_errors is not None else None
@@ -117,6 +130,10 @@ class Simulator:
         self.qvel[:, t] = self.data.qvel
         self.ctrl[:, t] = self.data.ctrl
         self.time[t] = self.data.time
+        self.recorded_steps = max(self.recorded_steps, t + 1)
+        if self.command_history is not None:
+            self.command_history[t] = self.agent.command_velocity
+            self.command_target_history[t] = self.agent.command_target
         if self.ee_errors is not None:
             objective = self.agent.ee_objective
             position = objective.positions(self.data.qpos)
@@ -166,6 +183,9 @@ class Simulator:
         image.save(filename)
 
     def run(self):
+        self.run_started_at = datetime.now(ZoneInfo("Asia/Seoul"))
+        self.filter_failure = None
+        completed_steps = 0
         tqdm_range = tqdm.tqdm(range(self.T-1))
         action = self.data.ctrl.copy()
         for t in tqdm_range:
@@ -175,10 +195,22 @@ class Simulator:
 
             if self.agent is not None:
                 if t % self.update_ratio == 0:
-                    action = self.agent.update(np.concatenate([self.data.qpos, self.data.qvel], axis=0))
+                    try:
+                        action = self.agent.update(np.concatenate([self.data.qpos, self.data.qvel], axis=0))
+                    except FilterFailure:
+                        qp_filter = getattr(self.agent, 'qp_filter', None)
+                        if qp_filter is None or qp_filter.failure is None:
+                            raise
+                        self.filter_failure = qp_filter.failure
+                        print(f"Simulation stopped before applying command: {self.filter_failure['reason']}")
+                        break
                 self.data.ctrl = action
+                if self.command_history is not None:
+                    self.command_history[t] = self.agent.command_velocity
+                    self.command_target_history[t] = self.agent.command_target
 
             mujoco.mj_step(self.model, self.data)
+            completed_steps = t + 1
             
             error = np.linalg.norm(np.array(self.agent.body_ref[:3]) - np.array(self.data.qpos[:3]))
             if t % self.update_ratio == 0 and error < self.agent.goal_thresh[self.agent.goal_index]:
@@ -192,13 +224,14 @@ class Simulator:
                     self.viewer.add_marker(pos=self.agent.ee_objective.target_world(self.data.qpos),
                                            size=[0.025]*3, rgba=[0, 1, 0, 0.8],
                                            type=mujoco.mjtGeom.mjGEOM_SPHERE, label='EE target')
-                self.viewer.add_marker(
-                    pos=self.agent.body_ref[:3]*1,         # Position of the marker
-                    size=[0.15, 0.15, 0.15],     # Size of the sphere
-                    rgba=[1, 0, 1, 1],           # Color of the sphere (red)
-                    type=mujoco.mjtGeom.mjGEOM_SPHERE, # Specify that this is a sphere
-                    label=""
-                )
+                if not getattr(self.agent, 'velocity_tracking', False):
+                    self.viewer.add_marker(
+                        pos=self.agent.body_ref[:3]*1,         # Position of the marker
+                        size=[0.15, 0.15, 0.15],     # Size of the sphere
+                        rgba=[1, 0, 1, 1],           # Color of the sphere (red)
+                        type=mujoco.mjtGeom.mjGEOM_SPHERE, # Specify that this is a sphere
+                        label=""
+                    )
                             
                 self.viewer.render()
                 if self.save_frames:
@@ -207,10 +240,27 @@ class Simulator:
                 pass
         
         # store last state
-        self.store_trajectory(self.T-1)
+        self.store_trajectory(completed_steps)
         
         if self.viewer is not None:
             self.viewer.close()
+        if self.command_history is not None:
+            from whole_body_mppi.analysis.cmd_vel_plot import save_cmd_vel_plot
+            self.cmd_vel_plot_path = save_cmd_vel_plot(self)
+            print(f'Command tracking plot: {self.cmd_vel_plot_path}')
+        qp_filter = getattr(self.agent, 'qp_filter', None)
+        if qp_filter is not None:
+            import json
+            report = dict(task=self.agent.task, solver=self.agent.mppi_mode,
+                          safety=getattr(self.agent, "safety_mode", None),
+                          started_at=self.run_started_at.isoformat(),
+                          simulated_time=float(self.data.time), initial_key=self.initial_key,
+                          filter_config=qp_filter.cfg,
+                          barrier_config=qp_filter.barrier.cfg, failure=self.filter_failure,
+                          history=qp_filter.history)
+            self.qp_report_path = self.cmd_vel_plot_path.with_suffix('.qp.json')
+            self.qp_report_path.write_text(json.dumps(report, indent=2))
+            print(f'QP diagnostics: {self.qp_report_path}')
         return None
 
     def plot_trajectory(self):
