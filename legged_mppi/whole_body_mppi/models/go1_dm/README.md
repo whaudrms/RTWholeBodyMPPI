@@ -86,37 +86,26 @@ MuJoCo 3.1.6에서 `walk_straight --mpopi --headless`를 실행했습니다. `fu
 
 상세 메시 표시 변경 후 두 옵션의 오프스크린 렌더링을 확인했습니다. 물리 모델의 mesh asset은 5개를 유지하고 표시 모델만 53개를 사용합니다. 상세 표시는 그리기 비용만 추가하며 rollout의 물리 계산량은 늘리지 않습니다.
 
-## EE 위치 목표를 포함한 whole-body task
+## EE 선속도 cmd_vel whole-body task
 
-EE 제어는 별도 task로 선택합니다. 기존 stand/walk task는 다리 제어 + 팔 자세 유지 동작을 보존하고, 아래 두 task는 다리 12축 + 팔 6축을 하나의 MPPI 계열 최적화에서 동시에 탐색합니다. go1_dm + full 모델에서만 지원합니다.
+몸통과 EE 모두 속도 명령을 추종합니다. 다리 12개와 팔 J1–J4의 총 16개 관절 목표 위치를 함께 최적화하며 `--robot go1_dm --rollout-model full`이 필요합니다.
 
-| task | 동작 | config | EE 목표 |
-|---|---|---|---|
-| `ee_reach` | 정지 상태의 EE 도달 | `control/configs/mppi_ee_reach.yml` | world `(0.45, 0.04, 0.78)` m |
-| `ee_walk` | 보행 중 EE 상대 위치 추종 | `control/configs/mppi_ee_walk.yml` | base `(0.45, 0.03, 0.55)` m |
+| Task | 몸통 명령 `[vx,vy,yaw_rate]` | EE 선속도 기준 |
+|---|---|---|
+| `ee_reach_cmd_vel` | `[0,0,0]` | world 절대속도 |
+| `ee_walk_cmd_vel` | `[0.2,0,0]` | 몸통 기준 상대속도 |
 
 ```bash
-python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach --mpopi
-python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_walk --mpopi
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --mpopi
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_walk_cmd_vel --mpopi
 ```
 
-`control/tasks/definitions.py`의 `TASKS`에서 각 task의 `ee_target`, `ee_frame`, `arm_joint_ref`, `arm_velocity_ref`을 수정합니다. config의 `whole_body` 블록에서는 weight, terminal_weight, arm_noise_sigma를 수정합니다. 각 파일은 기존 task와 동일하게 MPPI/gait 비용 설정도 포함합니다. EE 목표·가중치를 설정하는 CLI 옵션은 제공하지 않습니다.
+`control/tasks/definitions.py`에서 `ee_cmd_vel`(m/s), `ee_command_duration`(s), `ee_frame`을 설정합니다. 현재 EE 명령은 reach `[0,0,-0.03]`, walk `[0.03,0,0]`으로 2초간 이동 후 `[0,0,0]`입니다. 예측 horizon에도 같은 시간 스케줄을 적용합니다. EE 위치 목표 및 위치 hold 비용은 없습니다. 0 속도 명령은 그 순간의 위치에서 움직이지 않도록 유도하지만, 누적 위치 오차를 복구하는 위치 제어는 아닙니다. 유한 명령 시간 자체가 작업공간 안전을 보장하지는 않습니다.
 
-```yaml
-whole_body:
-  weight: 2000.0
-  terminal_weight: 5.0
-  arm_noise_sigma: [0.12, 0.12, 0.12, 0.12, 0.12, 0.12]
-```
+world 속도는 몸통 이동·회전에 따른 TCP 속도를 포함합니다. base 속도는 몸통에 대한 TCP 위치의 시간 미분으로, 단순히 world 속도를 회전시킨 값이 아닙니다. 몸통에 대한 상대 이동이 없으면 몸통의 이동·회전과 무관하게 0입니다. 각속도·EE 방향·접촉력·파지 제어는 포함하지 않습니다. TCP는 `dm_tcp`입니다.
 
-기준점은 dm_tcp (upstream end_link 원점)이며 실제 그리퍼 도구 TCP 보정값은 아닙니다. world 목표는 공간에 고정되므로 보행 중 몸통이 멀어지면 도달 불가능해질 수 있습니다. base 목표는 몸통과 함께 이동합니다. 이번 구현은 위치 3축 추종이며 EE 방향·접촉력·파지 제어는 포함하지 않습니다.
+각 config의 `whole_body.weight`, `terminal_weight`는 EE 선속도 제곱 오차의 누적/종단 비용에 적용합니다. 기존 숫자는 초기값으로 유지했으며 속도 제어용 튜닝은 별도입니다. 팔 자세·속도 정규화, 토크 비용, actuator 한계는 유지합니다. batch 기구학으로 EE 순간 속도를 계산하며 MuJoCo Jacobian과 비교 검증합니다.
 
-기존 보행 비용 + EE 위치 제곱 오차의 누적/종단 비용 + 팔 토크 정규화 비용을 사용합니다. 관절각 제한과 모델 actuator 토크 제한을 적용하며 solver 알고리즘 자체는 변경하지 않습니다. EE 비용은 batch forward kinematics로 계산하고 매 rollout 시점의 추가 mj_forward를 피합니다.
+몸통은 heading-frame 속도 추종, 높이·기울기·gait 비용을 사용하며 x/y waypoint와 절대 yaw 목표는 없습니다. home 자세에서 시작하고 지정한 실행 시간 동안 지속합니다. 실행 후 `whole_body_mppi/outputs/`에 몸통 tracking PNG와 `_ee_velocity.png`가 저장됩니다. EE plot에는 각 축 명령/측정 속도, 오차, RMSE, 좌표계 및 실행 설정이 표시됩니다. 위치 목표를 뜻하던 초록색 구는 더 이상 표시하지 않습니다.
 
-EE task는 home standing으로 시작하고 기존 보행 task는 sit 초기화를 유지합니다. viewer의 초록색 구가 EE 목표이며, 최종 출력과 EE 오차 plot으로 추종 상태를 확인할 수 있습니다. Locomotion task succeeded.는 보행 목표 판정이고 EE 최종 오차는 별도로 출력합니다.
-
-초기 실험 (MuJoCo 3.1.6, MPOPI): 정지 월드 목표에서 5초 후 오차 약 0.101→0.034 m, 보행 몸통 기준 목표에서 10초 후 보행 목표 도달 및 EE 오차 약 0.046 m였습니다. 두 경우 경고는 0개였습니다. 임의 목표·외란에 대한 안정성·정확도를 보장하는 결과는 아니며 추가 튜닝 여지가 있습니다.
-
-Task/config 분리 후 전체 테스트 32개가 통과했습니다. `ee_walk --mpopi --headless --steps 1000` 실행에서 보행 목표 도달, EE 최종 오차 약 0.020 m (base frame), MuJoCo 경고 0개를 확인했습니다. 삭제한 EE CLI 옵션의 거부와 별도 config 로딩도 테스트합니다.
-
-EE config의 `Q_diag`는 qpos+qvel 순서의 49개 상태 가중치이며, 팔 관절각 6개(기본 1.0)와 각속도 6개(기본 0.1)를 포함합니다. `R_diag`는 다리 12개 + 팔 6개 토크 가중치입니다. 팔 토크 가중치 기본값은 각 0.001이며, 기존 `whole_body.arm_control_weight`를 대체합니다. 팔 기준 자세는 home 자세, 기준 각속도는 0입니다.
+`ee_reach`, `ee_walk` 및 config 이름은 `_cmd_vel` 이름으로 변경했습니다. 기존 위치 추종 결과는 새 속도 task의 성능 검증 결과로 사용하지 않습니다. Shield/CLF-CBF-QP를 모든 optimizer와 조합할 수 있습니다. J5/J6는 샘플링부터 home PD 목표각으로 고정합니다(물리 관절은 유지). QP는 몸통·EE CLF와 slack을 각각 분리하고 기존 높이·기울기 CBF를 적용합니다. Go1과 같이 Shield 잔여 위반은 기록 후 계속하고, QP의 solver·입력·CBF 실패는 중단합니다. [설정과 실행 예](../../../docs/clf_cbf_qp.md)를 참고하세요.

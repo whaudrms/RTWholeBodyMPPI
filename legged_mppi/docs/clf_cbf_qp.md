@@ -51,8 +51,7 @@ exits with code 2. The partial tracking PNG and `.qp.json` are saved in
 `whole_body_mppi/outputs/`. JSON includes history, configuration, failed current
 state, nominal/candidate command, command reference, solver status and residuals.
 No previous or nominal command is silently substituted. This simulation stop is
-not a hardware emergency-stop controller; the option is scoped to the Go1
-command task in simulation.
+not a hardware emergency-stop controller; the option supports the Go1 command task and Go1+DM EE velocity tasks in simulation.
 
 All simulation modes default to the standing `home` keyframe unless the task
 specifies another initial key. The nominal planner is initialized from the
@@ -96,3 +95,25 @@ filenames and QP JSON distinguish the optimizer from the safety layer. Shield
 retains its nominal-plan warm-start policy; optimizer covariance state is not
 reset by the per-cycle repair. Successful composition is not a performance or
 safety guarantee; cost scaling and covariance adaptation still require tuning.
+
+## Go1+DM EE velocity tasks
+
+`ee_reach_cmd_vel` and `ee_walk_cmd_vel` support both safety options with every optimizer.
+MPPI and the safety layer optimize 16 commands: 12 legs and arm J1–J4.
+J5/J6 commands are fixed at home throughout sampling, prediction and application.
+The physical model retains 18 actuators; fixed wrist commands are PD targets, not welded joints.
+
+QP variables are 16 corrections plus independent body and EE nonnegative slacks.
+The objective adds `0.5*ee_slack_weight*ee_slack**2` to the body slack and correction penalties.
+Each CLF has its own linearized decay constraint. The EE CLF is
+`0.5*sum(((v_ee-command)/ee_velocity_scale)**2)` in the task's velocity frame
+(world for reach; trunk-relative for walk). Its command is frozen for the current check.
+There are 33 nominal/Jacobian predictions plus one nonlinear verification.
+The two hard height/tilt CBFs and failure policy are unchanged. No arm obstacle CBF is added.
+Each EE YAML supplies its own `shield_mppi` limits and `clf_cbf_qp` settings;
+initial values match Go1. EE diagnostics use the `ee_` prefix.
+
+```bash
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_walk_cmd_vel --mpopi --clf-cbf-qp
+python legged_mppi/scripts/simulate_mppi.py --robot go1_dm --task ee_reach_cmd_vel --dial-mpc --shield-mppi
+```

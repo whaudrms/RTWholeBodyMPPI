@@ -35,8 +35,8 @@ class LocomotionController(LocomotionCost, BaseTaskController):
         self.task_data = get_task(task)
 
         self.velocity_tracking = self.task_data.get('tracking_mode') == 'cmd_vel'
-        if self.velocity_tracking and robot != 'go1':
-            raise ValueError('walk_straight_cmd_vel currently supports Go1 only')
+        if self.velocity_tracking and robot != self.task_data.get('required_robot', 'go1'):
+            raise ValueError(f'{task} requires {self.task_data.get("required_robot", "go1")}')
 
         self.goal_pos = self.task_data['goal_pos']
         self.goal_ori = self.task_data['default_orientation']

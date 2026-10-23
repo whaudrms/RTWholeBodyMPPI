@@ -68,3 +68,50 @@ class EndEffectorObjective:
         if self.frame == 'world':
             return self.target.copy()
         return qpos[:3]+quaternion_matrix(qpos[3:7])@self.target
+
+
+class EndEffectorVelocityObjective(EndEffectorObjective):
+    """Instantaneous TCP linear velocity; base means derivative relative to trunk."""
+    velocity_tracking = True
+
+    def __init__(self, model, command, duration, frame='world', weight=2000., terminal_weight=5.):
+        super().__init__(model, command, frame, weight, terminal_weight)
+        if not np.isfinite(duration) or duration <= 0:
+            raise ValueError('EE command duration must be finite and positive')
+        self.duration = float(duration)
+        self.dof_addresses = {int(model.jnt_qposadr[j]): int(model.jnt_dofadr[j]) for j in range(model.njnt)}
+
+    def command_at(self, time):
+        time = np.asarray(time)
+        return np.where((time < self.duration)[..., None], self.target, 0.)
+
+    def velocities(self, qpos, qvel):
+        qpos, qvel = np.asarray(qpos), np.asarray(qvel)
+        rotation = quaternion_matrix(qpos[..., 3:7]) if self.frame == 'world' else np.broadcast_to(np.eye(3), qpos.shape[:-1]+(3,3)).copy()
+        position = qpos[..., :3].copy() if self.frame == 'world' else np.zeros(qpos.shape[:-1]+(3,))
+        axes = []
+        for offset, orientation, joints in self.chain:
+            position += np.einsum('...ij,j->...i', rotation, offset)
+            rotation = rotation @ orientation
+            for adr, zero, anchor, skew in joints:
+                axis = np.array([skew[2,1], skew[0,2], skew[1,0]])
+                axes.append((np.einsum('...ij,j->...i', rotation, axis),
+                             position + np.einsum('...ij,j->...i', rotation, anchor),
+                             qvel[..., self.dof_addresses[adr]]))
+                angle = qpos[..., adr]-zero
+                relative = np.eye(3)+np.sin(angle)[...,None,None]*skew+(1-np.cos(angle))[...,None,None]*(skew@skew)
+                new_rotation = rotation @ relative
+                position += np.einsum('...ij,j->...i', rotation-new_rotation, anchor)
+                rotation = new_rotation
+        tcp = position + np.einsum('...ij,j->...i', rotation, self.site_pos)
+        velocity = np.zeros_like(tcp)
+        for axis, origin, rate in axes:
+            velocity += np.cross(axis, tcp-origin)*rate[...,None]
+        if self.frame == 'world':
+            world_omega = np.einsum('...ij,...j->...i', quaternion_matrix(qpos[...,3:7]), qvel[...,3:6])
+            velocity += qvel[...,:3] + np.cross(world_omega, tcp-qpos[...,:3])
+        return velocity
+
+    def cost(self, qpos, qvel, reference):
+        error = np.sum((self.velocities(qpos, qvel)-reference)**2, axis=-1)
+        return self.weight*(error.sum(axis=1)+self.terminal_weight*error[:,-1])

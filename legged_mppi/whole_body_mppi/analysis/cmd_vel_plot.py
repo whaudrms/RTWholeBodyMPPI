@@ -56,5 +56,30 @@ def save_cmd_vel_plot(simulator, output_dir=None):
         filename_mode += '+' + safety
     path = directory / f'{agent.task}_{filename_mode}_{started:%Y%m%d_%H%M%S_%f}_KST.png'
     fig.savefig(path, dpi=160)
+    title = fig._suptitle.get_text()
     fig.clear()
+    if getattr(getattr(agent, 'ee_objective', None), 'velocity_tracking', False):
+        ee_fig = Figure(figsize=(14, 10), layout='constrained')
+        FigureCanvasAgg(ee_fig)
+        ee_axes = ee_fig.subplots(3, 2, sharex=True)
+        ee_fig.suptitle(title + f'\nEE linear velocity | frame={agent.ee_objective.frame}', fontsize=11)
+        actual_ee = simulator.ee_velocities[:count]
+        command_ee = simulator.ee_commands[:count]
+        for i, axis in enumerate(('x', 'y', 'z')):
+            error_ee = actual_ee[:, i]-command_ee[:, i]
+            ee_axes[i,0].step(time, command_ee[:,i], where='post', label='EE command')
+            ee_axes[i,0].plot(time, actual_ee[:,i], label='EE measured')
+            ee_axes[i,0].set_title(f'EE v{axis}')
+            ee_axes[i,0].legend()
+            ee_axes[i,1].plot(time, error_ee, color='tab:red')
+            ee_axes[i,1].set_title(f'Error | RMSE={np.sqrt(np.mean(error_ee**2)):.4f} m/s')
+            for panel in ee_axes[i]:
+                panel.set_ylabel('m/s')
+                panel.grid(True, alpha=.25)
+        for panel in ee_axes[-1]:
+            panel.set_xlabel('Simulation time (s)')
+        simulator.ee_velocity_plot_path = path.with_name(path.stem + '_ee_velocity.png')
+        ee_fig.savefig(simulator.ee_velocity_plot_path, dpi=160)
+        ee_fig.clear()
+        print(f'EE velocity plot: {simulator.ee_velocity_plot_path}')
     return path

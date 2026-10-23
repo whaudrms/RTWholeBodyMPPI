@@ -101,6 +101,8 @@ class Simulator:
         self.command_target_history = np.zeros((self.T, 3)) if self.command_history is not None else None
         self.cost = np.zeros((1, self.T))
         self.ee_errors = np.zeros(self.T) if hasattr(agent, 'ee_objective') else None
+        self.ee_velocities = np.zeros((self.T, 3)) if hasattr(agent, 'ee_objective') else None
+        self.ee_commands = np.zeros((self.T, 3)) if hasattr(agent, 'ee_objective') else None
         self.ee_positions = np.zeros((3, self.T)) if self.ee_errors is not None else None
 
         # Ensure the directory exists
@@ -142,7 +144,12 @@ class Simulator:
             else:
                 from whole_body_mppi.control.costs.end_effector import quaternion_matrix
                 self.ee_positions[:, t] = self.data.qpos[:3]+quaternion_matrix(self.data.qpos[3:7])@position
-            self.ee_errors[t] = np.linalg.norm(position-objective.target)
+            if getattr(objective, 'velocity_tracking', False):
+                self.ee_velocities[t] = objective.velocities(self.data.qpos, self.data.qvel)
+                self.ee_commands[t] = objective.command_at(self.data.time)
+                self.ee_errors[t] = np.linalg.norm(self.ee_velocities[t]-self.ee_commands[t])
+            else:
+                self.ee_errors[t] = np.linalg.norm(position-objective.target)
         if self.agent is not None:
             if t % self.update_ratio == 0 or t == self.T - 1:
                 self.cost[0, t] = self.agent.eval_best_trajectory()
@@ -220,7 +227,7 @@ class Simulator:
                 break
             if self.viewer is not None and t % self.update_ratio == 0:
                 self.sync_render_state()
-                if self.ee_errors is not None:
+                if self.ee_errors is not None and not getattr(self.agent.ee_objective, 'velocity_tracking', False):
                     self.viewer.add_marker(pos=self.agent.ee_objective.target_world(self.data.qpos),
                                            size=[0.025]*3, rgba=[0, 1, 0, 0.8],
                                            type=mujoco.mjtGeom.mjGEOM_SPHERE, label='EE target')
@@ -324,7 +331,7 @@ class Simulator:
             plt.figure()
             plt.plot(self.time, self.ee_errors)
             plt.xlabel("Time (s)")
-            plt.ylabel("EE position error (m)")
+            plt.ylabel('EE velocity error (m/s)' if getattr(self.agent.ee_objective, 'velocity_tracking', False) else 'EE position error (m)')
         plt.show()
         
         return None

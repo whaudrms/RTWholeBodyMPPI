@@ -1,4 +1,4 @@
-"""One-command Go1 CLF-CBF filter. Linearized QP, nonlinear acceptance check."""
+"""One-command body/EE CLF-CBF filter. Linearized QP, nonlinear acceptance check."""
 from time import perf_counter
 import numpy as np
 import osqp
@@ -26,17 +26,37 @@ class CLFCBFQP:
         if not isinstance(self.cfg['max_iterations'], int) or self.cfg['max_iterations'] < 1:
             raise ValueError('max_iterations must be a positive integer')
         self.rho = np.exp(-self.cfg['decay_rate'] * agent.h)
+        self.has_ee = hasattr(agent, 'ee_objective')
+        self.n_clf = 2 if self.has_ee else 1
+        self.decays = np.array([self.rho])
+        self.slack_weights = np.array([self.cfg['slack_weight']])
+        if self.has_ee:
+            self.ee_scale = np.asarray(self.cfg['ee_velocity_scale'], dtype=float)
+            if self.ee_scale.shape != (3,) or not np.all(np.isfinite(self.ee_scale) & (self.ee_scale > 0)):
+                raise ValueError('ee_velocity_scale must contain three positive finite values')
+            for key in ('ee_decay_rate', 'ee_slack_weight'):
+                if not np.isfinite(self.cfg[key]) or self.cfg[key] <= 0:
+                    raise ValueError(f'{key} must be positive and finite')
+            self.decays = np.r_[self.rho, np.exp(-self.cfg['ee_decay_rate']*agent.h)]
+            self.slack_weights = np.r_[self.slack_weights, self.cfg['ee_slack_weight']]
         self.history = []
         self.failure = None
         self.previous_solution = None
 
     def values(self, states, reference):
-        """Return [V, h_height, h_tilt] from full MuJoCo physics states."""
+        """Return body V, optional EE V, then height/tilt margins."""
         states = np.atleast_2d(states)
-        velocity, yaw_rate, _ = heading_velocity(states[:, 4:8], states[:, 20:23], states[:, 23:26])
-        error = (np.column_stack((velocity[:, :2], yaw_rate)) - reference) / self.scale
+        nq = getattr(getattr(self.agent, 'model', None), 'nq', 19)
+        qvel = states[:, 1+nq:]
+        velocity, yaw_rate, _ = heading_velocity(states[:, 4:8], qvel[:, :3], qvel[:, 3:6])
+        error = (np.column_stack((velocity[:, :2], yaw_rate)) - reference[:3]) / self.scale
         V = .5 * np.sum(error**2, axis=1)
-        return np.column_stack((V, self.barrier.barriers(states)))
+        columns = [V]
+        if self.has_ee:
+            ee_velocity = self.agent.ee_objective.velocities(states[:, 1:1+nq], qvel)
+            ee_error = (ee_velocity-reference[3:6])/self.ee_scale
+            columns.append(.5*np.sum(ee_error**2, axis=1))
+        return np.column_stack((*columns, self.barrier.barriers(states)))
 
     def predict(self, obs, controls, reference):
         agent = self.agent
@@ -51,10 +71,14 @@ class CLFCBFQP:
         start = perf_counter()
         a, c = self.agent, self.cfg
         n = a.act_dim
+        m = self.n_clf
+        factors = np.r_[self.decays, self.barrier.cfg['alpha'], self.barrier.cfg['alpha']]
         u0 = nominal[0].copy()
         self.failure = None
         self.failure_candidate = None
         reference = a.command_velocity.copy()  # Held fixed for this one-step test.
+        if self.has_ee:
+            reference = np.r_[reference, a.ee_reference[0]]
         row = dict(status='not_solved', accepted=False, slack=None, clf_residual=None,
                    min_cbf_residual=None, correction_norm=None, elapsed_ms=None)
 
@@ -82,21 +106,21 @@ class CLFCBFQP:
                 stop('Invalid finite-difference interval')
             values = self.predict(obs, np.vstack((u0, plus, minus)), reference)
             jac = ((values[1:1+n] - values[1+n:]) / width[:, None]).T
-            residual = values[0] - np.r_[self.rho, self.barrier.cfg['alpha'], self.barrier.cfg['alpha']] * current
+            residual = values[0] - factors * current
             if not np.isfinite(jac).all() or not np.isfinite(residual).all():
                 stop('Non-finite model linearization')
-            # z=[delta_u(12), CLF slack]. Hard CBF, soft aggregate CLF.
-            A = np.zeros((3 + n + 1, n + 1))
-            A[:3, :n] = jac
-            A[0, -1] = -1
-            A[3:, :] = np.eye(n + 1)
+            # z = current command corrections, then one slack per CLF.
+            A = np.zeros((m + 2 + n + m, n + m))
+            A[:m+2, :n] = jac
+            A[:m, n:] = -np.eye(m)
+            A[m+2:, :] = np.eye(n+m)
             lower_delta = np.maximum(a.act_min-u0, -self.limit)
             upper_delta = np.minimum(a.act_max-u0, self.limit)
-            lower = np.r_[-np.inf, -residual[1:], lower_delta, 0.]
-            upper = np.r_[-residual[0], np.inf, np.inf, upper_delta, np.inf]
-            P = sparse.diags(np.r_[1/self.limit**2, c['slack_weight']], format='csc')
+            lower = np.r_[np.full(m, -np.inf), -residual[m:], lower_delta, np.zeros(m)]
+            upper = np.r_[-residual[:m], np.inf, np.inf, upper_delta, np.full(m, np.inf)]
+            P = sparse.diags(np.r_[1/self.limit**2, self.slack_weights], format='csc')
             solver = osqp.OSQP()
-            solver.setup(P=P, q=np.zeros(n+1), A=sparse.csc_matrix(A), l=lower, u=upper,
+            solver.setup(P=P, q=np.zeros(n+m), A=sparse.csc_matrix(A), l=lower, u=upper,
                          verbose=False, eps_abs=c['solver_tolerance'], eps_rel=c['solver_tolerance'],
                          max_iter=c['max_iterations'], polishing=True)
             if self.previous_solution is not None:
@@ -114,9 +138,10 @@ class CLFCBFQP:
             delta = np.clip(z[:n], lower_delta, upper_delta)
             command = np.clip(u0 + delta, a.act_min, a.act_max)
             self.failure_candidate = command.tolist()
-            slack = max(float(z[-1]), 0.)
+            slacks = np.maximum(z[n:], 0.)
+            slack = float(slacks[0])
             actual = self.predict(obs, command[None], reference)[0]
-            actual_residual = actual - np.r_[self.rho, self.barrier.cfg['alpha'], self.barrier.cfg['alpha']] * current
+            actual_residual = actual - factors * current
             # CLF is soft: report its true relaxation, not a hard safety failure.
             # Keep `slack` as the QP value for compatibility with earlier logs.
             row.update(slack=slack, qp_slack=slack,
@@ -126,13 +151,21 @@ class CLFCBFQP:
                        clf_decreased=bool(actual[0] <= current[0]),
                        clf_current=float(current[0]), clf_next=float(actual[0]),
                        clf_residual=float(actual_residual[0]-slack),
-                       min_cbf_residual=float(actual_residual[1:].min()),
+                       min_cbf_residual=float(actual_residual[m:].min()),
                        correction_norm=float(np.linalg.norm(command-u0)))
+            if self.has_ee:
+                row.update(ee_qp_slack=float(slacks[1]),
+                           ee_actual_required_slack=float(max(actual_residual[1], 0.)),
+                           ee_clf_slack_excess=float(max(actual_residual[1]-slacks[1], 0.)),
+                           ee_clf_decay_satisfied=bool(actual_residual[1] <= tol),
+                           ee_clf_decreased=bool(actual[1] <= current[1]),
+                           ee_clf_current=float(current[1]), ee_clf_next=float(actual[1]),
+                           ee_clf_residual=float(actual_residual[1]-slacks[1]))
             if not np.isfinite(actual_residual).all():
                 stop('Non-finite nonlinear verification result')
-            if np.any(actual_residual[1:] < -tol) or np.any(actual[1:] < -tol):
+            if np.any(actual_residual[m:] < -tol) or np.any(actual[m:] < -tol):
                 stop('Nonlinear one-step CBF verification failed')
-            self.previous_solution = np.r_[command-u0, slack]
+            self.previous_solution = np.r_[command-u0, slacks]
             plan = nominal.copy()
             plan[0] = command  # Future controls are never changed.
             row.update(accepted=True, elapsed_ms=1000*(perf_counter()-start), reason='accepted')

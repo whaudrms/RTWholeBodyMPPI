@@ -4,7 +4,7 @@
 python legged_mppi/scripts/simulate_mppi.py --task walk_straight_cmd_vel --shield-mppi --headless --steps 300
 ```
 
-Supported scope: Go1, flat-ground `walk_straight_cmd_vel`. The independent safety option adds DCBF violation costs to
+Supported scope: Go1 `walk_straight_cmd_vel`, and Go1+DM `ee_reach_cmd_vel` / `ee_walk_cmd_vel` (full model). The independent safety option adds DCBF violation costs to
 sample evaluation, then repairs the first `repair_steps` controls. It does not
 add CLF or a QP and is not enabled for hardware or other tasks.
 
@@ -57,3 +57,5 @@ filenames and QP JSON distinguish the optimizer from the safety layer. Shield
 retains its nominal-plan warm-start policy; optimizer covariance state is not
 reset by the per-cycle repair. Successful composition is not a performance or
 safety guarantee; cost scaling and covariance adaptation still require tuning.
+
+EE tasks optimize and repair 16 commands (12 legs + arm J1–J4); J5/J6 retain home PD targets in every rollout and applied command. Height/tilt CBFs remain unchanged. Residual violations are logged and execution continues, matching Go1. See [QP and EE details](clf_cbf_qp.md).

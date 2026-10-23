@@ -35,9 +35,11 @@ def apply_mppi_mode(agent, mode, safety_mode=None):
         mode = 'mppi'  # Safety-only CLI retains the previous one-pass baseline.
     if mode not in (None, 'mppi', 'dial-mpc', 'cma-mppi', 'mpopi', 'mbd'):
         raise ValueError(f'Unknown MPPI mode: {mode}')
-    if safety_mode is not None and (getattr(agent, 'task', None) != 'walk_straight_cmd_vel'
-                                    or getattr(agent, 'robot', None) != 'go1'):
-        raise ValueError(f'--{safety_mode} currently requires Go1 walk_straight_cmd_vel')
+    supported = ((getattr(agent, 'task', None) == 'walk_straight_cmd_vel' and getattr(agent, 'robot', None) == 'go1')
+                 or (getattr(agent, 'task', None) in ('ee_reach_cmd_vel', 'ee_walk_cmd_vel')
+                     and getattr(agent, 'robot', None) == 'go1_dm' and hasattr(agent, 'ee_objective')))
+    if safety_mode is not None and not supported:
+        raise ValueError(f'--{safety_mode} requires a supported Go1 or whole-body cmd_vel task')
     agent.mppi_mode = mode
     agent.safety_mode = safety_mode
     # Restore YAML settings when changing modes on an existing controller.

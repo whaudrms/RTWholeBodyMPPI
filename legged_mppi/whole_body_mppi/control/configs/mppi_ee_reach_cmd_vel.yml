@@ -1,0 +1,137 @@
+# Whole-body heading-frame cmd_vel tracking; EE target/weights retained.
+dt: 0.01
+n_samples: 30
+n_iterations: 3
+beta_iteration: 0.5
+beta_horizon: 0.5
+lambda: 0.1
+horizon: 40
+n_workers: 5
+seed: 42
+o_solref:
+- 0.02
+- 1.0
+sample_type: cubic
+n_knots: 4
+noise_sigma:
+- 0.06
+- 0.1
+- 0.1
+- 0.06
+- 0.1
+- 0.1
+- 0.06
+- 0.1
+- 0.1
+- 0.06
+- 0.1
+- 0.1
+Q_diag:
+- 0
+- 0
+- 500
+- 400000
+- 0
+- 0
+- 0
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 800
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1.0
+- 1000
+- 1000
+- 0.0001
+- 0.0001
+- 0.0001
+- 100
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+- 0.1
+R_diag:
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+- 0.001
+whole_body:
+  weight: 20000.0
+  terminal_weight: 5.0
+  arm_noise_sigma:
+  - 0.12
+  - 0.12
+  - 0.12
+  - 0.12
+  - 0.12
+  - 0.12
+
+# Same initial body barriers as Go1; independent body/EE CLF slacks.
+shield_mppi:
+  alpha: 0.9
+  cost_weight: 10000.0
+  min_height: 0.18
+  max_tilt_deg: 20.0
+  repair_steps: 3
+  max_iterations: 3
+  max_evaluations: 150
+  tolerance: 1.0e-06
+  fd_step: 0.0001
+clf_cbf_qp:
+  velocity_scale:
+  - 0.2
+  - 0.2
+  - 0.5
+  decay_rate: 1.0
+  slack_weight: 100.0
+  max_correction: 0.05
+  fd_step: 0.0001
+  tolerance: 0.0001
+  solver_tolerance: 1.0e-06
+  max_iterations: 4000
+  ee_velocity_scale:
+  - 0.1
+  - 0.1
+  - 0.1
+  ee_decay_rate: 1.0
+  ee_slack_weight: 100.0

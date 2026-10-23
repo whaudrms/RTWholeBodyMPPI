@@ -19,7 +19,14 @@ class WholeBodyCost:
         ref[:, 25:31] = body_ref[7:]
         ref[:, 31:43] = gait[:, 12:]
         ref[:, 43:49] = self.arm_velocity_ref
-        x[:, 25:28] = batch_world_to_local_velocity(x[:, 3:7], x[:, 25:28])
+        if getattr(self, 'velocity_tracking', False):
+            from whole_body_mppi.control.costs.cmd_vel import heading_velocity
+            velocity, yaw_rate, tilt = heading_velocity(x[:, 3:7], x[:, 25:28], x[:, 28:31])
+            x[:, 25:28] = velocity
+            x[:, 30] = yaw_rate
+            x[:, 3:7] = tilt
+        else:
+            x[:, 25:28] = batch_world_to_local_velocity(x[:, 3:7], x[:, 25:28])
         error = x - ref
         error[:, 3:7] = self.quaternion_distance_np(x[:, 3:7], ref[:, 3:7])[:, None]
         # Preserve the locomotion objective's L1 base-position cost.

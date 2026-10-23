@@ -14,7 +14,7 @@ from whole_body_mppi.control.solvers.options import add_mppi_mode_arguments, app
 
 VALID_TASKS = ['walk_straight_cmd_vel', 'stairs', 'stand', 'walk_octagon', 'walk_straight', 'big_box',
                'walk_octagon_hw', 'walk_straight_hw', 'stand_hw', 'climb_box_hw',
-               'ee_reach', 'ee_walk']
+               'ee_reach_cmd_vel', 'ee_walk_cmd_vel']
 
 
 def main(task, mppi_mode=None, robot='go1', *, headless=False, steps=2000, plot=True, rollout_model='full', initial_key=None, safety_mode=None):
@@ -35,15 +35,15 @@ def main(task, mppi_mode=None, robot='go1', *, headless=False, steps=2000, plot=
                 task_data.get('initial_key', 'home')), model_variant=rollout_model)
         if hasattr(agent, 'ee_objective'):
             import numpy as np
-            initial_error = np.linalg.norm(agent.ee_objective.positions(simulator.data.qpos)-agent.ee_objective.target)
-            print(f'EE initial error: {initial_error:.4f} m')
+            initial_error = np.linalg.norm(agent.ee_objective.velocities(simulator.data.qpos, simulator.data.qvel)-agent.ee_objective.command_at(simulator.data.time))
+            print(f'EE initial velocity error: {initial_error:.4f} m/s')
         simulator.run()
         print(f'robot={robot}, mode={agent.mppi_mode or "configured"}, safety={agent.safety_mode or "none"}, '
               f't={simulator.data.time:.2f}s, base={simulator.data.qpos[:3]}, '
               f'goal={agent.goal_index}, warnings={simulator.data.warning.number.sum()}')
         if hasattr(agent, 'ee_objective'):
-            final_error = np.linalg.norm(agent.ee_objective.positions(simulator.data.qpos)-agent.ee_objective.target)
-            print(f'EE final error: {final_error:.4f} m ({agent.ee_objective.frame} frame)')
+            final_error = np.linalg.norm(agent.ee_objective.velocities(simulator.data.qpos, simulator.data.qvel)-agent.ee_objective.command_at(simulator.data.time))
+            print(f'EE final velocity error: {final_error:.4f} m/s ({agent.ee_objective.frame} frame)')
         if getattr(agent, 'shield', None) is not None:
             import csv
             history = agent.shield.history
